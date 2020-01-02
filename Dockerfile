@@ -1,9 +1,9 @@
 FROM golang:latest
 
 # copy the source files
-COPY . /go/src/bitbucket.org/vintikzzzz/magnet2torrent
+COPY . /go/src/github.com/webtor-io/magnet2torrent
 
-WORKDIR /go/src/bitbucket.org/vintikzzzz/magnet2torrent/server
+WORKDIR /go/src/github.com/webtor-io/magnet2torrent/server
 
 # enable modules
 ENV GO111MODULE=on
@@ -20,7 +20,7 @@ RUN go build -mod=vendor -ldflags '-w -s' -a -installsuffix cgo -o server
 FROM scratch
 
 # copy our static linked library
-COPY --from=0 /go/src/bitbucket.org/vintikzzzz/magnet2torrent/server/server .
+COPY --from=0 /go/src/github.com/webtor-io/magnet2torrent/server/server .
 
 # tell we are exposing our service on port 50051
 EXPOSE 50051

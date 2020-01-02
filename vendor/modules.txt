@@ -78,7 +78,7 @@ github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus/ctxlogrus
 github.com/grpc-ecosystem/go-grpc-middleware/recovery
 github.com/grpc-ecosystem/go-grpc-middleware/tags
 github.com/grpc-ecosystem/go-grpc-middleware/tags/logrus
-# github.com/huandu/xstrings v1.2.0
+# github.com/huandu/xstrings v1.0.0
 github.com/huandu/xstrings
 # github.com/joonix/log v0.0.0-20190130132305-f5f056244ba3
 github.com/joonix/log
@@ -131,7 +131,7 @@ golang.org/x/time/rate
 # golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7
 golang.org/x/xerrors
 golang.org/x/xerrors/internal
-# google.golang.org/genproto v0.0.0-20181221175505-bd9b4fb69e2f
+# google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.17.0
 google.golang.org/grpc

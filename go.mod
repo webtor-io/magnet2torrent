@@ -1,7 +1,6 @@
 module github.com/webtor-io/magnet2torrent
 
 require (
-	bitbucket.org/vintikzzzz/magnet2torrent v0.0.0-20191003070844-6a0918b831db // indirect
 	github.com/anacrolix/torrent v1.7.1
 	github.com/golang/protobuf v1.2.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.0.0
