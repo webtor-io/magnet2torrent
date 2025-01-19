@@ -5,9 +5,6 @@ COPY . /go/src/github.com/webtor-io/magnet2torrent
 
 WORKDIR /go/src/github.com/webtor-io/magnet2torrent/server
 
-# enable modules
-ENV GO111MODULE=on
-
 # disable crosscompiling
 ENV CGO_ENABLED=0
 
@@ -15,9 +12,9 @@ ENV CGO_ENABLED=0
 ENV GOOS=linux
 
 # build the binary with debug information removed
-RUN go build -mod=vendor -ldflags '-w -s' -a -installsuffix cgo -o server
+RUN go build -ldflags '-w -s' -a -installsuffix cgo -o server
 
-FROM scratch
+FROM alpine:3.21
 
 # copy our static linked library
 COPY --from=0 /go/src/github.com/webtor-io/magnet2torrent/server/server .

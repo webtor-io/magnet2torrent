@@ -8,7 +8,7 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
-	pb "github.com/webtor-io/magnet2torrent/magnet2torrent"
+	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
