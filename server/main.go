@@ -37,6 +37,7 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	clientConfig := torrent.NewDefaultClientConfig()
 	clientConfig.ListenPort = 0
 	clientConfig.Seed = false
+	clientConfig.DisableWebtorrent = true
 	client, err := torrent.NewClient(clientConfig)
 	if err != nil {
 		log.WithError(err).Error("failed create torrent client")
