@@ -30,6 +30,8 @@ type server struct {
 	// mux sync.Mutex
 }
 
+const grpcMaxMsgSize = 1024 * 1024 * 50
+
 func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (*pb.Magnet2TorrentReply, error) {
 	log.WithField("magnet", in.Magnet).Info("processing new request")
 	// s.mux.Lock()
@@ -122,6 +124,8 @@ func main() {
 					grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
 					grpc_recovery.UnaryServerInterceptor(),
 				)),
+				grpc.MaxRecvMsgSize(grpcMaxMsgSize),
+				grpc.MaxSendMsgSize(grpcMaxMsgSize),
 			)
 			pb.RegisterMagnet2TorrentServer(s, &server{})
 			reflection.Register(s)
