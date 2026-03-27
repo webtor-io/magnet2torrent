@@ -28,26 +28,34 @@ import (
 
 type server struct {
 	pb.UnimplementedMagnet2TorrentServer
-	// mux sync.Mutex
+	client *torrent.Client
 }
 
 const grpcMaxMsgSize = 1024 * 1024 * 50
 
-func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (*pb.Magnet2TorrentReply, error) {
-	log.WithField("magnet", in.Magnet).Info("processing new request")
-	// s.mux.Lock()
-	// defer s.mux.Unlock()
-	clientConfig := torrent.NewDefaultClientConfig()
-	clientConfig.ListenPort = 0
-	clientConfig.Seed = false
-	clientConfig.DisableWebtorrent = true
-	client, err := torrent.NewClient(clientConfig)
+func newServer() (*server, error) {
+	cfg := torrent.NewDefaultClientConfig()
+	cfg.ListenPort = 0
+	cfg.Seed = false
+	cfg.DisableWebtorrent = true
+	cfg.DisableWebseeds = true
+	client, err := torrent.NewClient(cfg)
 	if err != nil {
-		log.WithError(err).Error("failed create torrent client")
 		return nil, err
 	}
-	defer client.Close()
-	t, err := client.AddMagnet(in.Magnet)
+	log.Info("shared torrent client initialized")
+	return &server{client: client}, nil
+}
+
+func (s *server) Close() {
+	if s.client != nil {
+		s.client.Close()
+	}
+}
+
+func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (*pb.Magnet2TorrentReply, error) {
+	log.WithField("magnet", in.Magnet).Info("processing new request")
+	t, err := s.client.AddMagnet(in.Magnet)
 	if err != nil {
 		log.WithError(err).Error("failed adding new magnet to the client")
 		return nil, err
@@ -129,6 +137,14 @@ func main() {
 			log.WithError(err).Error("failed to start listening tcp connections")
 			return err
 		}
+		// Setting shared torrent client
+		srv, err := newServer()
+		if err != nil {
+			log.WithError(err).Error("failed to create server")
+			return err
+		}
+		defer srv.Close()
+
 		grpcError := make(chan error, 1)
 		go func() {
 			log.WithField("addr", addr).Info("start listening for incoming GRPC connections")
@@ -150,7 +166,7 @@ func main() {
 				grpc.MaxRecvMsgSize(grpcMaxMsgSize),
 				grpc.MaxSendMsgSize(grpcMaxMsgSize),
 			)
-			pb.RegisterMagnet2TorrentServer(s, &server{})
+			pb.RegisterMagnet2TorrentServer(s, srv)
 			reflection.Register(s)
 			err := s.Serve(l)
 			grpcError <- err
