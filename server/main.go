@@ -18,6 +18,7 @@ import (
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	cs "github.com/webtor-io/common-services"
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -84,7 +85,7 @@ func main() {
 	app.Name = "magnet2torrent"
 	app.Usage = "runs magnet2torrent server"
 	app.Version = "0.0.1"
-	app.Flags = []cli.Flag{
+	app.Flags = cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
 		cli.StringFlag{
 			Name:   "host, H",
 			Usage:  "listening host",
@@ -97,8 +98,30 @@ func main() {
 			Value:  50051,
 			EnvVar: "LISTEN_PORT",
 		},
-	}
+	}))
 	app.Action = func(c *cli.Context) error {
+		// Setting Probe
+		probe := cs.NewProbe(c)
+		if probe != nil {
+			defer probe.Close()
+			go func() {
+				if err := probe.Serve(); err != nil {
+					log.WithError(err).Error("probe serve error")
+				}
+			}()
+		}
+
+		// Setting Pprof
+		pprof := cs.NewPprof(c)
+		if pprof != nil {
+			defer pprof.Close()
+			go func() {
+				if err := pprof.Serve(); err != nil {
+					log.WithError(err).Error("pprof serve error")
+				}
+			}()
+		}
+
 		addr := fmt.Sprintf("%s:%d", c.String("host"), c.Int("port"))
 		l, err := net.Listen("tcp", addr)
 		defer l.Close()
