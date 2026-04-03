@@ -28,39 +28,49 @@ import (
 
 type server struct {
 	pb.UnimplementedMagnet2TorrentServer
-	client *torrent.Client
 }
 
 const grpcMaxMsgSize = 1024 * 1024 * 50
 
-func newServer() (*server, error) {
+func newServer() *server {
+	return &server{}
+}
+
+func (s *server) newClient() (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.ListenPort = 0
 	cfg.Seed = false
 	cfg.DisableWebtorrent = true
 	cfg.DisableWebseeds = true
-	client, err := torrent.NewClient(cfg)
-	if err != nil {
-		return nil, err
-	}
-	log.Info("shared torrent client initialized")
-	return &server{client: client}, nil
+	return torrent.NewClient(cfg)
 }
 
-func (s *server) Close() {
-	if s.client != nil {
-		s.client.Close()
-	}
-}
+func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (reply *pb.Magnet2TorrentReply, err error) {
+	// Recover from panics in anacrolix/torrent
+	defer func() {
+		if r := recover(); r != nil {
+			log.WithField("panic", r).Error("recovered from panic in magnet resolution")
+			err = status.Errorf(codes.Internal, "internal error: %v", r)
+		}
+	}()
 
-func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (*pb.Magnet2TorrentReply, error) {
 	log.WithField("magnet", in.Magnet).Info("processing new request")
-	t, err := s.client.AddMagnet(in.Magnet)
+
+	// Create a fresh client per request to avoid shared state panics.
+	client, err := s.newClient()
+	if err != nil {
+		log.WithError(err).Error("failed to create torrent client")
+		return nil, status.Errorf(codes.Internal, "failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	t, err := client.AddMagnet(in.Magnet)
 	if err != nil {
 		log.WithError(err).Error("failed adding new magnet to the client")
 		return nil, err
 	}
 	defer t.Drop()
+
 	select {
 	case <-time.After(5 * time.Minute):
 		err := status.Error(codes.Aborted, "fetching torrent takes too long")
@@ -75,6 +85,7 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		log.WithError(ctx.Err()).Error("request deadline exceeded")
 		return nil, ctx.Err()
 	}
+
 	mi := t.Metainfo()
 	bytes, err := bencode.Marshal(mi)
 	if err != nil {
@@ -137,13 +148,8 @@ func main() {
 			log.WithError(err).Error("failed to start listening tcp connections")
 			return err
 		}
-		// Setting shared torrent client
-		srv, err := newServer()
-		if err != nil {
-			log.WithError(err).Error("failed to create server")
-			return err
-		}
-		defer srv.Close()
+		// Setting server (per-request torrent clients)
+		srv := newServer()
 
 		grpcError := make(chan error, 1)
 		go func() {
