@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
@@ -32,6 +35,23 @@ type server struct {
 
 const grpcMaxMsgSize = 1024 * 1024 * 50
 
+// noopStorage discards all piece data — magnet2torrent only needs metainfo.
+type noopStorage struct{}
+
+func (noopStorage) OpenTorrent(_ context.Context, _ *metainfo.Info, _ metainfo.Hash) (storage.TorrentImpl, error) {
+	return storage.TorrentImpl{
+		Piece: func(metainfo.Piece) storage.PieceImpl { return noopPiece{} },
+	}, nil
+}
+
+type noopPiece struct{}
+
+func (noopPiece) ReadAt([]byte, int64) (int, error)  { return 0, io.EOF }
+func (noopPiece) WriteAt(b []byte, _ int64) (int, error) { return len(b), nil }
+func (noopPiece) MarkComplete() error                { return nil }
+func (noopPiece) MarkNotComplete() error             { return nil }
+func (noopPiece) Completion() storage.Completion      { return storage.Completion{} }
+
 func newServer() *server {
 	return &server{}
 }
@@ -42,6 +62,7 @@ func (s *server) newClient() (*torrent.Client, error) {
 	cfg.Seed = false
 	cfg.DisableWebtorrent = true
 	cfg.DisableWebseeds = true
+	cfg.DefaultStorage = noopStorage{}
 	return torrent.NewClient(cfg)
 }
 

@@ -2,6 +2,8 @@ module github.com/webtor-io/magnet2torrent
 
 go 1.25
 
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20260417103103-8badad926e96
+
 require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -15,8 +17,8 @@ require (
 
 require (
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
+	github.com/ajwerner/btree v0.0.0-20211221152037-f427b3e689c0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
-	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/chansync v0.7.0 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
 	github.com/anacrolix/envpprof v1.4.0 // indirect
@@ -54,7 +56,6 @@ require (
 	github.com/go-pg/zerochecker v0.2.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
