@@ -447,8 +447,8 @@ github.com/vmihailenco/tagparser/v2 v2.0.0 h1:y09buUbR+b5aycVFQs/g70pqKVZNBmxwAh
 github.com/vmihailenco/tagparser/v2 v2.0.0/go.mod h1:Wri+At7QHww0WTrCBeu4J6bNtoV6mEfg5OIWRZA9qds=
 github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7 h1:Kuvd4Xk3anrvOw8O9GNsJZuPSCiqKFrLGcjajBCEl3I=
 github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7/go.mod h1:jSGKiO/KVhavntTXhPXzjvt3sMMbCIYaCnxMhOklvEQ=
-github.com/webtor-io/torrent v0.0.0-20260417103103-8badad926e96 h1:d42RBczHGOQ5UHRMPINuN3WX7k1IwV5Z+hr+zCNBrbw=
-github.com/webtor-io/torrent v0.0.0-20260417103103-8badad926e96/go.mod h1:6hGL5nOAk4j0zrPqyZ7GKYIkRPgehXFE9N8N6rAatQI=
+github.com/webtor-io/torrent v0.0.0-20260503092815-c83f53296a5b h1:8KnIdhQw+f4/NbvYg63wMMHtpb24Vwsi9Uusy7Xq6cE=
+github.com/webtor-io/torrent v0.0.0-20260503092815-c83f53296a5b/go.mod h1:6hGL5nOAk4j0zrPqyZ7GKYIkRPgehXFE9N8N6rAatQI=
 github.com/willf/bitset v1.1.9/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/willf/bitset v1.1.10/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
