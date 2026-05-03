@@ -2,7 +2,7 @@ module github.com/webtor-io/magnet2torrent
 
 go 1.25
 
-replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20260503115721-87d5dd9df24b
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20260503123952-6864bc1a2649
 
 require (
 	github.com/anacrolix/torrent v1.61.0
@@ -130,4 +130,4 @@ require (
 	zombiezen.com/go/sqlite v1.4.2 // indirect
 )
 
-replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503115429-fdf5a98449a0
+replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71

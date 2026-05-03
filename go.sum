@@ -445,10 +445,10 @@ github.com/vmihailenco/tagparser/v2 v2.0.0 h1:y09buUbR+b5aycVFQs/g70pqKVZNBmxwAh
 github.com/vmihailenco/tagparser/v2 v2.0.0/go.mod h1:Wri+At7QHww0WTrCBeu4J6bNtoV6mEfg5OIWRZA9qds=
 github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7 h1:Kuvd4Xk3anrvOw8O9GNsJZuPSCiqKFrLGcjajBCEl3I=
 github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7/go.mod h1:jSGKiO/KVhavntTXhPXzjvt3sMMbCIYaCnxMhOklvEQ=
-github.com/webtor-io/torrent v0.0.0-20260503115721-87d5dd9df24b h1:CBjexv/GIcZNx14t/3tAuC4uvmEILhHLn/JtQ2ao5rk=
-github.com/webtor-io/torrent v0.0.0-20260503115721-87d5dd9df24b/go.mod h1:lFexzzFNZpiGhwH2UKAWlLn+ujyBb9gWd/OwLQVPsIQ=
-github.com/webtor-io/utp v0.2.1-0.20260503115429-fdf5a98449a0 h1:S7dfvnWrfyEglqSRtjWM4CAfy4mtt2dUz+3SfV2Sl5E=
-github.com/webtor-io/utp v0.2.1-0.20260503115429-fdf5a98449a0/go.mod h1:HGk4GYQw1O/3T1+yhqT/F6EcBd+AAwlo9dYErNy7mj8=
+github.com/webtor-io/torrent v0.0.0-20260503123952-6864bc1a2649 h1:e7etqcN3yMZhfOCcupmETz3pkWCqYOnCOoZ+LPSMJ4w=
+github.com/webtor-io/torrent v0.0.0-20260503123952-6864bc1a2649/go.mod h1:+grExvB/R/rMshKJNTTPNxKFLsxqbETsXsyQDHSQfUA=
+github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71 h1:ZYVgRxIEJzttPQt82Gq9DXpiHcrK0OIQeO53x0Jzg3k=
+github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71/go.mod h1:HGk4GYQw1O/3T1+yhqT/F6EcBd+AAwlo9dYErNy7mj8=
 github.com/willf/bitset v1.1.9/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/willf/bitset v1.1.10/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
