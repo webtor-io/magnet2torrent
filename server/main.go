@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,28 @@ import (
 
 type server struct {
 	pb.UnimplementedMagnet2TorrentServer
+	// defaultTrackers are announced for every magnet on top of its own tr=
+	// parameters. Measured 2026-09-04 in prod: magnets carrying 3+ trackers
+	// resolved 53% of the time, tracker-less ones 33% — a fresh client has
+	// an empty DHT table, and a tracker answers in a round-trip. Same list
+	// torrent-store merges into stored torrents (DEFAULT_TRACKERS).
+	defaultTrackers []string
+}
+
+// maxWait bounds a single resolution regardless of the caller's deadline.
+// Ten minutes: web-ui's "try again for 10 minutes" retry must not be cut by
+// a shorter server-side cap; the normal first attempt is the caller's 60 s.
+const maxWait = 10 * time.Minute
+
+// parseTrackers reads a comma- or whitespace-separated list.
+func parseTrackers(raw string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 const grpcMaxMsgSize = 1024 * 1024 * 50
@@ -46,14 +69,14 @@ func (noopStorage) OpenTorrent(_ context.Context, _ *metainfo.Info, _ metainfo.H
 
 type noopPiece struct{}
 
-func (noopPiece) ReadAt([]byte, int64) (int, error)  { return 0, io.EOF }
+func (noopPiece) ReadAt([]byte, int64) (int, error)      { return 0, io.EOF }
 func (noopPiece) WriteAt(b []byte, _ int64) (int, error) { return len(b), nil }
-func (noopPiece) MarkComplete() error                { return nil }
-func (noopPiece) MarkNotComplete() error             { return nil }
-func (noopPiece) Completion() storage.Completion      { return storage.Completion{} }
+func (noopPiece) MarkComplete() error                    { return nil }
+func (noopPiece) MarkNotComplete() error                 { return nil }
+func (noopPiece) Completion() storage.Completion         { return storage.Completion{} }
 
-func newServer() *server {
-	return &server{}
+func newServer(defaultTrackers []string) *server {
+	return &server{defaultTrackers: defaultTrackers}
 }
 
 func (s *server) newClient() (*torrent.Client, error) {
@@ -91,9 +114,12 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		return nil, err
 	}
 	defer t.Drop()
+	if len(s.defaultTrackers) > 0 {
+		t.AddTrackers([][]string{s.defaultTrackers})
+	}
 
 	select {
-	case <-time.After(5 * time.Minute):
+	case <-time.After(maxWait):
 		err := status.Error(codes.Aborted, "fetching torrent takes too long")
 		log.WithError(err).Error("fetching torrent takes too long")
 		return nil, err
@@ -138,6 +164,11 @@ func main() {
 			Value:  50051,
 			EnvVar: "LISTEN_PORT",
 		},
+		cli.StringFlag{
+			Name:   "default-trackers",
+			Usage:  "trackers announced for every magnet on top of its own (comma- or whitespace-separated)",
+			EnvVar: "DEFAULT_TRACKERS",
+		},
 	}))
 	app.Action = func(c *cli.Context) error {
 		// Setting Probe
@@ -170,7 +201,7 @@ func main() {
 			return err
 		}
 		// Setting server (per-request torrent clients)
-		srv := newServer()
+		srv := newServer(parseTrackers(c.String("default-trackers")))
 
 		grpcError := make(chan error, 1)
 		go func() {
