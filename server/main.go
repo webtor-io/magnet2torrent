@@ -90,6 +90,10 @@ func (s *server) newClient() (*torrent.Client, error) {
 }
 
 func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentRequest) (reply *pb.Magnet2TorrentReply, err error) {
+	// Registered first so it runs last, after the recovery below has set err.
+	finishResolve := startResolve()
+	defer func() { finishResolve(err) }()
+
 	// Recover from panics in anacrolix/torrent
 	defer func() {
 		if r := recover(); r != nil {
@@ -120,9 +124,8 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 
 	select {
 	case <-time.After(maxWait):
-		err := status.Error(codes.Aborted, "fetching torrent takes too long")
-		log.WithError(err).Error("fetching torrent takes too long")
-		return nil, err
+		log.WithError(errResolveTooLong).Error("fetching torrent takes too long")
+		return nil, errResolveTooLong
 	case <-t.GotInfo():
 		log.WithFields(log.Fields{
 			"infoHash": t.InfoHash(),
@@ -143,6 +146,41 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	return &pb.Magnet2TorrentReply{Torrent: bytes}, nil
 }
 
+// newGRPCServer builds the server with the full interceptor chain. Shared
+// with the tests so that what they measure is what production runs.
+func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
+	grpcLog := log.WithFields(log.Fields{})
+	alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
+	// The metrics interceptor is outermost so that it observes the final
+	// status, including a panic that grpc_recovery (innermost) turned into
+	// codes.Internal.
+	s := grpc.NewServer(
+		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
+			grpcMetrics.StreamServerInterceptor(),
+			grpc_ctxtags.StreamServerInterceptor(),
+			grpc_logrus.StreamServerInterceptor(grpcLog),
+			grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
+			grpc_recovery.StreamServerInterceptor(),
+		)),
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			grpcMetrics.UnaryServerInterceptor(),
+			grpc_ctxtags.UnaryServerInterceptor(),
+			grpc_logrus.UnaryServerInterceptor(grpcLog),
+			grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
+			grpc_recovery.UnaryServerInterceptor(),
+		)),
+		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
+		grpc.MaxSendMsgSize(grpcMaxMsgSize),
+	)
+	pb.RegisterMagnet2TorrentServer(s, srv)
+	// Zero-valued series for every method, so a dashboard sees 0 instead of
+	// "no data" until the first call. Before reflection is registered, so the
+	// 17 codes x 2 reflection services are not pre-created as dead series.
+	grpcMetrics.InitializeMetrics(s)
+	reflection.Register(s)
+	return s
+}
+
 func main() {
 	log.SetFormatter(&log.TextFormatter{
 		FullTimestamp: true,
@@ -151,7 +189,7 @@ func main() {
 	app.Name = "magnet2torrent"
 	app.Usage = "runs magnet2torrent server"
 	app.Version = "0.0.1"
-	app.Flags = cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
+	app.Flags = cs.RegisterPromFlags(cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
 		cli.StringFlag{
 			Name:   "host, H",
 			Usage:  "listening host",
@@ -169,7 +207,7 @@ func main() {
 			Usage:  "trackers announced for every magnet on top of its own (comma- or whitespace-separated)",
 			EnvVar: "DEFAULT_TRACKERS",
 		},
-	}))
+	})))
 	app.Action = func(c *cli.Context) error {
 		// Setting Probe
 		probe := cs.NewProbe(c)
@@ -193,6 +231,17 @@ func main() {
 			}()
 		}
 
+		// Setting Prom (/metrics on 8083, scraped through the chart's ServiceMonitor)
+		prom := cs.NewProm(c)
+		if prom != nil {
+			defer prom.Close()
+			go func() {
+				if err := prom.Serve(); err != nil {
+					log.WithError(err).Error("prom serve error")
+				}
+			}()
+		}
+
 		addr := fmt.Sprintf("%s:%d", c.String("host"), c.Int("port"))
 		l, err := net.Listen("tcp", addr)
 		defer l.Close()
@@ -206,26 +255,7 @@ func main() {
 		grpcError := make(chan error, 1)
 		go func() {
 			log.WithField("addr", addr).Info("start listening for incoming GRPC connections")
-			grpcLog := log.WithFields(log.Fields{})
-			alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
-			s := grpc.NewServer(
-				grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
-					grpc_ctxtags.StreamServerInterceptor(),
-					grpc_logrus.StreamServerInterceptor(grpcLog),
-					grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-					grpc_recovery.StreamServerInterceptor(),
-				)),
-				grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-					grpc_ctxtags.UnaryServerInterceptor(),
-					grpc_logrus.UnaryServerInterceptor(grpcLog),
-					grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-					grpc_recovery.UnaryServerInterceptor(),
-				)),
-				grpc.MaxRecvMsgSize(grpcMaxMsgSize),
-				grpc.MaxSendMsgSize(grpcMaxMsgSize),
-			)
-			pb.RegisterMagnet2TorrentServer(s, srv)
-			reflection.Register(s)
+			s := newGRPCServer(srv)
 			err := s.Serve(l)
 			grpcError <- err
 		}()
