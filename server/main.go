@@ -150,7 +150,10 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 // with the tests so that what they measure is what production runs.
 func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	grpcLog := log.WithFields(log.Fields{})
-	alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
+	// No payload interceptors: the reply is the whole .torrent, and logging it
+	// produced 13 MB lines that Loki rejects (burst 6 MiB) while promtail
+	// stalls the whole node's shipping in backoff. The magnet is logged by
+	// the handler.
 	// The metrics interceptor is outermost so that it observes the final
 	// status, including a panic that grpc_recovery (innermost) turned into
 	// codes.Internal.
@@ -159,14 +162,12 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 			grpcMetrics.StreamServerInterceptor(),
 			grpc_ctxtags.StreamServerInterceptor(),
 			grpc_logrus.StreamServerInterceptor(grpcLog),
-			grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
 			grpc_recovery.StreamServerInterceptor(),
 		)),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
 			grpcMetrics.UnaryServerInterceptor(),
 			grpc_ctxtags.UnaryServerInterceptor(),
 			grpc_logrus.UnaryServerInterceptor(grpcLog),
-			grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
 			grpc_recovery.UnaryServerInterceptor(),
 		)),
 		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
