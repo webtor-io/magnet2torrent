@@ -26,6 +26,7 @@ import (
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 )
@@ -73,7 +74,12 @@ func (noopPiece) ReadAt([]byte, int64) (int, error)      { return 0, io.EOF }
 func (noopPiece) WriteAt(b []byte, _ int64) (int, error) { return len(b), nil }
 func (noopPiece) MarkComplete() error                    { return nil }
 func (noopPiece) MarkNotComplete() error                 { return nil }
-func (noopPiece) Completion() storage.Completion         { return storage.Completion{} }
+
+// Completion is known (Ok) and incomplete. An unknown completion makes the
+// client queue an initial hash check of every piece once the info arrives;
+// those hashers outlive Drop and Close, and a v2 piece's length is O(files),
+// so a big v2 torrent kept 2+ cores busy after its request had finished.
+func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok: true} }
 
 func newServer(defaultTrackers []string) *server {
 	return &server{defaultTrackers: defaultTrackers}
@@ -85,6 +91,11 @@ func (s *server) newClient() (*torrent.Client, error) {
 	cfg.Seed = false
 	cfg.DisableWebtorrent = true
 	cfg.DisableWebseeds = true
+	// Pods have no IPv6 route. The client splits every udp:// tracker into a
+	// udp4 and a udp6 announcer, and the udp6 one failed with "network is
+	// unreachable", 80% of all log lines. Also drops the v6 listeners (and so
+	// the v6 DHT) and v6 peer dials.
+	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
 	return torrent.NewClient(cfg)
 }
@@ -103,6 +114,13 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	}()
 
 	log.WithField("magnet", in.Magnet).Info("processing new request")
+
+	// AddMagnet parses the same way and then panics ("is zero") on a zero v1
+	// info-hash: an all-zero btih, or none (v2-only). A parse error is left
+	// to AddMagnet.
+	if m, err := metainfo.ParseMagnetV2Uri(in.Magnet); err == nil && m.InfoHash.Value.IsZero() {
+		return nil, status.Error(codes.InvalidArgument, "magnet has no non-zero btih info-hash")
+	}
 
 	// Create a fresh client per request to avoid shared state panics.
 	client, err := s.newClient()
@@ -133,7 +151,9 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		}).Info("torrent metainfo fetched")
 	case <-ctx.Done():
 		log.WithError(ctx.Err()).Error("request deadline exceeded")
-		return nil, ctx.Err()
+		// As a status: the logging interceptor reads a bare context error as
+		// Unknown and logs it at error level.
+		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 
 	mi := t.Metainfo()
@@ -172,6 +192,16 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 		)),
 		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
 		grpc.MaxSendMsgSize(grpcMaxMsgSize),
+		// rest-api holds one connection to the ClusterIP, and kube-proxy
+		// balances only at connect, so without an age limit all traffic
+		// stayed on one pod for days. At MaxConnectionAge (+-10% jitter) the
+		// server sends GOAWAY: new calls go over a fresh connection, which
+		// kube-proxy may place on another pod, while calls in flight run on.
+		// The grace outlasts maxWait so no resolve is cut.
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge:      30 * time.Minute,
+			MaxConnectionAgeGrace: maxWait + time.Minute,
+		}),
 	)
 	pb.RegisterMagnet2TorrentServer(s, srv)
 	// Zero-valued series for every method, so a dashboard sees 0 instead of
