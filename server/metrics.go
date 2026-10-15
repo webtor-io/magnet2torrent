@@ -26,8 +26,11 @@ var grpcMetrics = grpcprom.NewServerMetrics(
 // returns Aborted and the caller's deadline returns DeadlineExceeded, yet for
 // the operator both are the same thing — nobody in the swarm answered — and
 // that is the expected fate of a dead magnet (33-38% of them in prod), not a
-// service fault. A client that walked away (Canceled) is neither a fault nor
-// a dead magnet and must not inflate the error rate.
+// service fault. Canceled is not a fault either and must not inflate the
+// error rate. In practice it is the same dead magnet seen from the other
+// side: web-ui gives up after 60 s and cancels before any deadline fires
+// (2 days to 2026-10-15: 47% canceled, 0 timeout; 88% of the canceled ones
+// ended between 30 and 60 s).
 const (
 	outcomeOK       = "ok"
 	outcomeTimeout  = "timeout"
@@ -43,7 +46,7 @@ var errResolveTooLong = status.Error(codes.Aborted, "fetching torrent takes too 
 var (
 	resolveTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "m2t_resolve_total",
-		Help: "Magnet resolutions finished, by outcome. timeout = nobody in the swarm answered before the deadline (dead magnet), canceled = the caller went away, error = the service itself failed.",
+		Help: "Magnet resolutions finished, by outcome. timeout = nobody in the swarm answered before the deadline (dead magnet), canceled = the caller (web-ui, 60 s) gave up waiting, mostly dead magnets too, not a service failure, error = the service itself failed.",
 	}, []string{"outcome"})
 
 	// Labelled by outcome so that the latency of successful resolves is

@@ -139,7 +139,9 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		}).Info("torrent metainfo fetched")
 	case <-ctx.Done():
 		log.WithError(ctx.Err()).Error("request deadline exceeded")
-		return nil, ctx.Err()
+		// As a status: the logging interceptor reads a bare context error as
+		// Unknown and logs it at error level.
+		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 
 	mi := t.Metainfo()
