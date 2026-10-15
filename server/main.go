@@ -91,6 +91,11 @@ func (s *server) newClient() (*torrent.Client, error) {
 	cfg.Seed = false
 	cfg.DisableWebtorrent = true
 	cfg.DisableWebseeds = true
+	// Pods have no IPv6 route. The client splits every udp:// tracker into a
+	// udp4 and a udp6 announcer, and the udp6 one failed with "network is
+	// unreachable", 80% of all log lines. Also drops the v6 listeners (and so
+	// the v6 DHT) and v6 peer dials.
+	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
 	return torrent.NewClient(cfg)
 }
