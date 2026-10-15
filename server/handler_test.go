@@ -35,6 +35,9 @@ func TestZeroInfoHash(t *testing.T) {
 		if c := status.Code(err); c != codes.InvalidArgument {
 			t.Errorf("%s: code %v (%v), want InvalidArgument", magnet, c, err)
 		}
+		if o := resolveOutcome(err); o != outcomeInvalid {
+			t.Errorf("%s: outcome %q, want %q", magnet, o, outcomeInvalid)
+		}
 	}
 }
 

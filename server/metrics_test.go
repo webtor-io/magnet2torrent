@@ -29,6 +29,7 @@ func TestResolveOutcome(t *testing.T) {
 		{"caller deadline (status)", status.Error(codes.DeadlineExceeded, "x"), outcomeTimeout},
 		{"caller went away (raw ctx error)", context.Canceled, outcomeCanceled},
 		{"caller went away (status)", status.Error(codes.Canceled, "x"), outcomeCanceled},
+		{"zero info-hash", status.Error(codes.InvalidArgument, "x"), outcomeInvalid},
 		{"recovered panic", status.Error(codes.Internal, "internal error: boom"), outcomeError},
 		{"malformed magnet", errors.New("magnet2torrent: bad magnet"), outcomeError},
 		// Some other Aborted must not be mistaken for the cap.
