@@ -26,6 +26,7 @@ import (
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 )
@@ -177,6 +178,16 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 		)),
 		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
 		grpc.MaxSendMsgSize(grpcMaxMsgSize),
+		// rest-api holds one connection to the ClusterIP, and kube-proxy
+		// balances only at connect, so without an age limit all traffic
+		// stayed on one pod for days. At MaxConnectionAge (+-10% jitter) the
+		// server sends GOAWAY: new calls go over a fresh connection, which
+		// kube-proxy may place on another pod, while calls in flight run on.
+		// The grace outlasts maxWait so no resolve is cut.
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge:      30 * time.Minute,
+			MaxConnectionAgeGrace: maxWait + time.Minute,
+		}),
 	)
 	pb.RegisterMagnet2TorrentServer(s, srv)
 	// Zero-valued series for every method, so a dashboard sees 0 instead of
