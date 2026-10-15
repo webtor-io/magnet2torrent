@@ -23,3 +23,17 @@ func TestCallerGaveUp(t *testing.T) {
 		t.Fatalf("outcome %q, want %q", o, outcomeCanceled)
 	}
 }
+
+// The client panics on a zero v1 info-hash; such a magnet is the caller's
+// mistake, not an Internal error.
+func TestZeroInfoHash(t *testing.T) {
+	for _, magnet := range []string{
+		"magnet:?xt=urn:btih:" + strings.Repeat("0", 40),
+		"magnet:?dn=x",
+	} {
+		_, err := newServer(nil).Magnet2Torrent(context.Background(), &pb.Magnet2TorrentRequest{Magnet: magnet})
+		if c := status.Code(err); c != codes.InvalidArgument {
+			t.Errorf("%s: code %v (%v), want InvalidArgument", magnet, c, err)
+		}
+	}
+}

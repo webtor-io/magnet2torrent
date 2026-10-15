@@ -110,6 +110,13 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 
 	log.WithField("magnet", in.Magnet).Info("processing new request")
 
+	// AddMagnet parses the same way and then panics ("is zero") on a zero v1
+	// info-hash: an all-zero btih, or none (v2-only). A parse error is left
+	// to AddMagnet.
+	if m, err := metainfo.ParseMagnetV2Uri(in.Magnet); err == nil && m.InfoHash.Value.IsZero() {
+		return nil, status.Error(codes.InvalidArgument, "magnet has no non-zero btih info-hash")
+	}
+
 	// Create a fresh client per request to avoid shared state panics.
 	client, err := s.newClient()
 	if err != nil {
