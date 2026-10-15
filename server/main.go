@@ -73,7 +73,12 @@ func (noopPiece) ReadAt([]byte, int64) (int, error)      { return 0, io.EOF }
 func (noopPiece) WriteAt(b []byte, _ int64) (int, error) { return len(b), nil }
 func (noopPiece) MarkComplete() error                    { return nil }
 func (noopPiece) MarkNotComplete() error                 { return nil }
-func (noopPiece) Completion() storage.Completion         { return storage.Completion{} }
+
+// Completion is known (Ok) and incomplete. An unknown completion makes the
+// client queue an initial hash check of every piece once the info arrives;
+// those hashers outlive Drop and Close, and a v2 piece's length is O(files),
+// so a big v2 torrent kept 2+ cores busy after its request had finished.
+func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok: true} }
 
 func newServer(defaultTrackers []string) *server {
 	return &server{defaultTrackers: defaultTrackers}
