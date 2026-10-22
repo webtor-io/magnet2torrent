@@ -14,7 +14,7 @@ ENV GOOS=linux
 # build the binary with debug information removed
 RUN go build -ldflags '-w -s' -a -installsuffix cgo -o server
 
-FROM alpine:3.21
+FROM alpine:latest
 
 # copy our static linked library
 COPY --from=0 /go/src/github.com/webtor-io/magnet2torrent/server/server .
