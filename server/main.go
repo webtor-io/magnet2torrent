@@ -266,7 +266,7 @@ func appFlags() []cli.Flag {
 		},
 		cli.BoolFlag{
 			Name:   allowLocalNetworksFlag,
-			Usage:  "let trackers and metainfo sources (xs=, as=) connect to loopback, private, link-local, CGNAT, multicast and unspecified addresses; refused by default, as a magnet picks the address",
+			Usage:  "lets trackers and metainfo sources (xs=, as=) be contacted on local network addresses: loopback, private, link-local, CGNAT, multicast, unspecified, reserved and the rest the README lists (for a tracker on the local network); refused by default, as a torrent or a magnet picks the address",
 			EnvVar: allowLocalNetworksEnv,
 		},
 	})))
