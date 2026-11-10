@@ -26,20 +26,24 @@ GLOBAL OPTIONS:
    --version, -v           print the version
 ```
 
-## Tracker addresses
+## Local network addresses
 
-A magnet picks the trackers the server connects to (its `tr=`), and DNS picks
-their addresses. By default the server refuses a tracker at a loopback,
-private (RFC 1918, IPv6 ULA), link-local (169.254.169.254 included), CGNAT
-(100.64.0.0/10), multicast or unspecified address, IPv4-mapped forms included,
-and logs a warning naming the flag below. `DEFAULT_TRACKERS` and the
-metainfo sources a magnet names (`xs=`, `as=`) are checked the same way. The
-check runs on the resolved address right before connecting (HTTP) or sending
-(UDP), so neither a DNS answer nor an HTTP redirect gets around it. Peer
-connections are not filtered.
+`--allow-local-networks` (`ALLOW_LOCAL_NETWORKS`, default `false`). Addresses
+that come from a torrent or a magnet are not connected to when they are on a
+local network: loopback, private (RFC 1918, IPv6 ULA `fc00::/7`), link-local
+(`169.254.0.0/16` with the cloud metadata address `169.254.169.254`, and
+`fe80::/10`), CGNAT (`100.64.0.0/10`), multicast or unspecified, IPv4-mapped
+forms included. The check is on the address actually connected or sent to,
+after DNS, so a name that resolves to such an address and a redirect to one
+are refused too. A refusal is logged as a warning at most once a minute per
+process, naming the refused `ip:port` and this variable; a counter counts
+every refusal. Set it to `true` when a tracker you use is on your own network.
+torrent-web-seeder and magnet2torrent read the same variable.
 
-A deployment whose trackers or sources really are on a local network sets
-`--allow-local-networks` (`ALLOW_LOCAL_NETWORKS=true`).
+In magnet2torrent it covers the trackers of a magnet (`tr=`),
+`DEFAULT_TRACKERS` and the metainfo sources a magnet names (`xs=`, `as=`):
+HTTP on connect, UDP on every send. The counter is
+`m2t_local_network_refusals_total`. Peer connections are not covered.
 
 ## Client usage
 

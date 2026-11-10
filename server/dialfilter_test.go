@@ -14,6 +14,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
+	"github.com/urfave/cli"
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 )
@@ -68,6 +69,7 @@ func (c *recordingPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 // TestLocalNetworkHooks: both hooks refuse what they cannot read, and the UDP
 // one refuses before the socket sees the packet.
 func TestLocalNetworkHooks(t *testing.T) {
+	s := newServer(nil)
 	for addr, refused := range map[string]bool{
 		"192.0.2.1:80":          false,
 		"[2001:db8::1]:80":      false,
@@ -78,7 +80,7 @@ func TestLocalNetworkHooks(t *testing.T) {
 		"not an address":        true,
 		"tracker.invalid:80":    true, // the hook only ever sees resolved addresses
 	} {
-		err := refuseLocalNetworks("tcp4", addr, nil)
+		err := s.refuseLocalNetworks("tcp4", addr, nil)
 		if refused != errors.Is(err, errLocalNetwork) {
 			t.Errorf("Control(%q) = %v, want refused=%v", addr, err, refused)
 		}
@@ -97,7 +99,7 @@ func TestLocalNetworkHooks(t *testing.T) {
 		{(*net.UDPAddr)(nil), true},
 	} {
 		rec := &recordingPacketConn{}
-		_, err := localNetworkRefusingConn{rec}.WriteTo([]byte("x"), c.addr)
+		_, err := localNetworkRefusingConn{rec, s}.WriteTo([]byte("x"), c.addr)
 		if c.refused != errors.Is(err, errLocalNetwork) || c.refused != (rec.writes == 0) {
 			t.Errorf("WriteTo(%v) = %v with %d writes, want refused=%v", c.addr, err, rec.writes, c.refused)
 		}
@@ -172,6 +174,90 @@ func TestLocalNetworksRefused(t *testing.T) {
 				t.Fatalf("no refusal logged for %s; endpoint got %d", addr, hits.Load())
 			})
 		}
+	}
+}
+
+// One warning a minute for the whole process, naming the address and the
+// variable that allows it, however many requests get refused: each request
+// has its own client, so a limit per client would still warn on every one.
+// The counter carries the volume.
+func TestLocalNetworkRefusalWarnedOnceAMinute(t *testing.T) {
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	refused := func() float64 { return counterValue(t, "m2t_local_network_refusals_total", nil) }
+	s := newServer(nil)
+	var addrs []string
+	for range 2 {
+		endpointURL, addr, hits := httpEndpoint(t)
+		addrs = append(addrs, addr)
+		r0 := refused()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			magnet := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20) + "&tr=" + url.QueryEscape(endpointURL)
+			_, _ = s.Magnet2Torrent(ctx, &pb.Magnet2TorrentRequest{Magnet: magnet})
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for refused() == r0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		if refused() == r0 {
+			t.Fatalf("request %d: no refusal counted", len(addrs))
+		}
+		if n := hits.Load(); n != 0 {
+			t.Fatalf("request %d: endpoint got %d connections", len(addrs), n)
+		}
+	}
+	var warns []*log.Entry
+	for _, e := range hook.AllEntries() {
+		if e.Level == log.WarnLevel {
+			warns = append(warns, e)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("%d warnings for refusals in %d requests, want 1", len(warns), len(addrs))
+	}
+	line, err := warns[0].String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{addrs[0], "ALLOW_LOCAL_NETWORKS"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("warning %q does not name %q", line, want)
+		}
+	}
+}
+
+// main hands the flag and its variable to the server; without either, local
+// networks stay refused. The names are spelled out: the variable is shared
+// with torrent-web-seeder through one env file in self-hosted.
+func TestAllowLocalNetworksFromFlags(t *testing.T) {
+	parse := func(args ...string) bool {
+		t.Helper()
+		var s *server
+		app := cli.NewApp()
+		app.Flags = appFlags()
+		app.Action = func(c *cli.Context) error {
+			s = serverFromFlags(c)
+			return nil
+		}
+		if err := app.Run(append([]string{"magnet2torrent"}, args...)); err != nil {
+			t.Fatal(err)
+		}
+		return s.allowLocalNetworks
+	}
+	if parse() {
+		t.Error("allowed by default")
+	}
+	if !parse("--allow-local-networks") {
+		t.Error("the flag does not allow")
+	}
+	t.Setenv("ALLOW_LOCAL_NETWORKS", "true")
+	if !parse() {
+		t.Error("the variable does not allow")
 	}
 }
 

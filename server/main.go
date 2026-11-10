@@ -26,6 +26,7 @@ import (
 	cs "github.com/webtor-io/common-services"
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
@@ -44,6 +45,9 @@ type server struct {
 	// loopback, private and other non-public addresses (see dialfilter.go).
 	// Off by default.
 	allowLocalNetworks bool
+	// refusalWarn lets one refusal a minute be logged. Shared by the
+	// per-request clients, so the limit holds for the process.
+	refusalWarn *rate.Limiter
 }
 
 // maxWait bounds a single resolution regardless of the caller's deadline.
@@ -87,7 +91,10 @@ func (noopPiece) MarkNotComplete() error                 { return nil }
 func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok: true} }
 
 func newServer(defaultTrackers []string) *server {
-	return &server{defaultTrackers: defaultTrackers}
+	return &server{
+		defaultTrackers: defaultTrackers,
+		refusalWarn:     rate.NewLimiter(rate.Every(time.Minute), 1),
+	}
 }
 
 func (s *server) newClient() (*torrent.Client, error) {
@@ -107,9 +114,9 @@ func (s *server) newClient() (*torrent.Client, error) {
 		// these are the same plus the check. HTTPDialContext serves the
 		// metainfo sources (a magnet's xs= and as=), fetched like a tracker
 		// from wherever the magnet says.
-		d := &net.Dialer{Control: refuseLocalNetworks}
+		d := &net.Dialer{Control: s.refuseLocalNetworks}
 		cfg.TrackerDialContext = d.DialContext
-		cfg.TrackerListenPacket = listenPacketRefusingLocalNetworks
+		cfg.TrackerListenPacket = s.listenPacketRefusingLocalNetworks
 		cfg.HTTPDialContext = d.DialContext
 	}
 	return torrent.NewClient(cfg)
@@ -236,15 +243,10 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	return s
 }
 
-func main() {
-	log.SetFormatter(&log.TextFormatter{
-		FullTimestamp: true,
-	})
-	app := cli.NewApp()
-	app.Name = "magnet2torrent"
-	app.Usage = "runs magnet2torrent server"
-	app.Version = "0.0.1"
-	app.Flags = cs.RegisterPromFlags(cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
+// appFlags is the command line; serverFromFlags builds the server from it.
+// Both apart from main so that a test parses what main parses.
+func appFlags() []cli.Flag {
+	return cs.RegisterPromFlags(cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
 		cli.StringFlag{
 			Name:   "host, H",
 			Usage:  "listening host",
@@ -268,6 +270,23 @@ func main() {
 			EnvVar: allowLocalNetworksEnv,
 		},
 	})))
+}
+
+func serverFromFlags(c *cli.Context) *server {
+	s := newServer(parseTrackers(c.String("default-trackers")))
+	s.allowLocalNetworks = c.Bool(allowLocalNetworksFlag)
+	return s
+}
+
+func main() {
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+	app := cli.NewApp()
+	app.Name = "magnet2torrent"
+	app.Usage = "runs magnet2torrent server"
+	app.Version = "0.0.1"
+	app.Flags = appFlags()
 	app.Action = func(c *cli.Context) error {
 		// Setting Probe
 		probe := cs.NewProbe(c)
@@ -310,8 +329,7 @@ func main() {
 			return err
 		}
 		// Setting server (per-request torrent clients)
-		srv := newServer(parseTrackers(c.String("default-trackers")))
-		srv.allowLocalNetworks = c.Bool(allowLocalNetworksFlag)
+		srv := serverFromFlags(c)
 
 		grpcError := make(chan error, 1)
 		go func() {

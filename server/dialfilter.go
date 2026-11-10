@@ -22,7 +22,7 @@ const (
 )
 
 const refusedLocalNetworkMsg = "refused connection to a local network address (allow with --" +
-	allowLocalNetworksFlag + " or " + allowLocalNetworksEnv + "=true)"
+	allowLocalNetworksFlag + " or " + allowLocalNetworksEnv + "=true; logged at most once a minute)"
 
 var errLocalNetwork = errors.New("local network address refused")
 
@@ -47,11 +47,18 @@ func isLocalNetworkAddr(ip netip.Addr) bool {
 		cgnat.Contains(ip)
 }
 
-func checkLocalNetwork(ip netip.Addr, addr string) error {
+// checkLocalNetwork refuses ip if it is on a local network. Each refused
+// tracker is refused again on every announce, a magnet can name many, and
+// each request has its own client: the warning is limited per server, which
+// is one per process, and m2t_local_network_refusals_total counts them all.
+func (s *server) checkLocalNetwork(ip netip.Addr, addr string) error {
 	if !isLocalNetworkAddr(ip) {
 		return nil
 	}
-	log.WithField("addr", addr).Warn(refusedLocalNetworkMsg)
+	localNetworkRefusals.Inc()
+	if s.refusalWarn.Allow() {
+		log.WithField("addr", addr).Warn(refusedLocalNetworkMsg)
+	}
 	return errLocalNetwork
 }
 
@@ -59,30 +66,33 @@ func checkLocalNetwork(ip netip.Addr, addr string) error {
 // resolution, right before connect, so it judges the address actually
 // dialled: every address a host name resolves to, and the target of every
 // HTTP redirect.
-func refuseLocalNetworks(_, address string, _ syscall.RawConn) error {
+func (s *server) refuseLocalNetworks(_, address string, _ syscall.RawConn) error {
 	// One that does not parse comes out as the zero Addr, which is refused.
 	ap, _ := netip.ParseAddrPort(address)
-	return checkLocalNetwork(ap.Addr(), address)
+	return s.checkLocalNetwork(ap.Addr(), address)
 }
 
 // localNetworkRefusingConn is the UDP counterpart. A UDP tracker socket is
 // unconnected: the client resolves the tracker and sends with WriteTo, so a
 // Control hook (which sees only the local address) cannot judge it.
-type localNetworkRefusingConn struct{ net.PacketConn }
+type localNetworkRefusingConn struct {
+	net.PacketConn
+	s *server
+}
 
 func (c localNetworkRefusingConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	// Any other address type yields the zero Addr, which is refused.
 	ua, _ := addr.(*net.UDPAddr)
-	if err := checkLocalNetwork(ua.AddrPort().Addr(), ua.String()); err != nil {
+	if err := c.s.checkLocalNetwork(ua.AddrPort().Addr(), ua.String()); err != nil {
 		return 0, err
 	}
 	return c.PacketConn.WriteTo(p, addr)
 }
 
-func listenPacketRefusingLocalNetworks(network, addr string) (net.PacketConn, error) {
+func (s *server) listenPacketRefusingLocalNetworks(network, addr string) (net.PacketConn, error) {
 	pc, err := net.ListenPacket(network, addr)
 	if err != nil {
 		return nil, err
 	}
-	return localNetworkRefusingConn{pc}, nil
+	return localNetworkRefusingConn{pc, s}, nil
 }
