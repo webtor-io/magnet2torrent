@@ -40,8 +40,9 @@ type server struct {
 	// an empty DHT table, and a tracker answers in a round-trip. Same list
 	// torrent-store merges into stored torrents (DEFAULT_TRACKERS).
 	defaultTrackers []string
-	// allowLocalNetworks lets trackers be dialled at loopback, private and
-	// other non-public addresses (see dialfilter.go). Off by default.
+	// allowLocalNetworks lets trackers and metainfo sources be dialled at
+	// loopback, private and other non-public addresses (see dialfilter.go).
+	// Off by default.
 	allowLocalNetworks bool
 }
 
@@ -103,9 +104,13 @@ func (s *server) newClient() (*torrent.Client, error) {
 	cfg.DefaultStorage = noopStorage{}
 	if !s.allowLocalNetworks {
 		// Unset, the client dials with a zero net.Dialer and net.ListenPacket;
-		// these are the same plus the check.
-		cfg.TrackerDialContext = (&net.Dialer{Control: refuseLocalNetworks}).DialContext
+		// these are the same plus the check. HTTPDialContext serves the
+		// metainfo sources (a magnet's xs= and as=), fetched like a tracker
+		// from wherever the magnet says.
+		d := &net.Dialer{Control: refuseLocalNetworks}
+		cfg.TrackerDialContext = d.DialContext
 		cfg.TrackerListenPacket = listenPacketRefusingLocalNetworks
+		cfg.HTTPDialContext = d.DialContext
 	}
 	return torrent.NewClient(cfg)
 }
@@ -259,7 +264,7 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:   allowLocalNetworksFlag,
-			Usage:  "let trackers connect to loopback, private, link-local, CGNAT, multicast and unspecified addresses; refused by default, as a magnet picks the address",
+			Usage:  "let trackers and metainfo sources (xs=, as=) connect to loopback, private, link-local, CGNAT, multicast and unspecified addresses; refused by default, as a magnet picks the address",
 			EnvVar: allowLocalNetworksEnv,
 		},
 	})))

@@ -32,12 +32,13 @@ A magnet picks the trackers the server connects to (its `tr=`), and DNS picks
 their addresses. By default the server refuses a tracker at a loopback,
 private (RFC 1918, IPv6 ULA), link-local (169.254.169.254 included), CGNAT
 (100.64.0.0/10), multicast or unspecified address, IPv4-mapped forms included,
-and logs a warning naming the flag below. `DEFAULT_TRACKERS` are checked the
-same way. The check runs on the resolved address right before connecting
-(HTTP) or sending (UDP), so neither a DNS answer nor an HTTP redirect gets
-around it. Peer connections are not filtered.
+and logs a warning naming the flag below. `DEFAULT_TRACKERS` and the
+metainfo sources a magnet names (`xs=`, `as=`) are checked the same way. The
+check runs on the resolved address right before connecting (HTTP) or sending
+(UDP), so neither a DNS answer nor an HTTP redirect gets around it. Peer
+connections are not filtered.
 
-A deployment whose trackers really are on a local network sets
+A deployment whose trackers or sources really are on a local network sets
 `--allow-local-networks` (`ALLOW_LOCAL_NETWORKS=true`).
 
 ## Client usage

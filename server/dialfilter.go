@@ -10,7 +10,8 @@ import (
 )
 
 // The addresses a tracker is dialled at come from the request: a magnet's
-// tr=, or the DNS answer for its host. Without a filter a magnet makes the
+// tr=, or the DNS answer for its host; the same goes for a metainfo source
+// (xs=, as=), fetched with a GET. Without a filter a magnet makes the
 // pod connect wherever it says: to itself, into the cluster, to the node's
 // network, to the metadata endpoint at 169.254.169.254. torrent-web-seeder
 // keeps its own copy on purpose: too small to be worth a shared module.

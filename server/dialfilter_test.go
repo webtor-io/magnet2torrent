@@ -104,20 +104,22 @@ func TestLocalNetworkHooks(t *testing.T) {
 	}
 }
 
-// TestTrackerLocalNetworks drives the handler against a tracker on loopback:
-// refused by default, with one warning naming the flag, and reached once the
-// flag allows local networks. The allowed run shows that the refused one
-// would have connected, so its "nothing arrived" is not vacuous.
-func TestTrackerLocalNetworks(t *testing.T) {
+// TestLocalNetworksRefused drives the handler against a tracker or a source
+// on loopback: refused by default, with one warning naming the flag, and
+// reached once the flag allows local networks. The allowed run shows that the
+// refused one would have connected, so its "nothing arrived" is not vacuous.
+func TestLocalNetworksRefused(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		tracker func(t *testing.T) (trackerURL, addr string, hits *atomic.Int64)
-		// Announced through DEFAULT_TRACKERS instead of the magnet's tr=.
-		viaDefault bool
+		name     string
+		endpoint func(t *testing.T) (endpointURL, addr string, hits *atomic.Int64)
+		// The magnet parameter that carries the URL; empty: DEFAULT_TRACKERS.
+		param string
 	}{
-		{name: "http tr=", tracker: httpTracker},
-		{name: "udp tr=", tracker: udpTracker},
-		{name: "http default", tracker: httpTracker, viaDefault: true},
+		{name: "http tr=", endpoint: httpEndpoint, param: "tr"},
+		{name: "udp tr=", endpoint: udpEndpoint, param: "tr"},
+		{name: "http default", endpoint: httpEndpoint},
+		// A metainfo source, fetched with the client's HTTP client.
+		{name: "xs= source", endpoint: httpEndpoint, param: "xs"},
 	} {
 		for _, allow := range []bool{false, true} {
 			name := c.name + " refused"
@@ -127,13 +129,13 @@ func TestTrackerLocalNetworks(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				hook := logtest.NewGlobal()
 				defer hook.Reset()
-				trackerURL, addr, hits := c.tracker(t)
+				endpointURL, addr, hits := c.endpoint(t)
 				magnet := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20)
 				var defaults []string
-				if c.viaDefault {
-					defaults = []string{trackerURL}
+				if c.param == "" {
+					defaults = []string{endpointURL}
 				} else {
-					magnet += "&tr=" + url.QueryEscape(trackerURL)
+					magnet += "&" + c.param + "=" + url.QueryEscape(endpointURL)
 				}
 				s := newServer(defaults)
 				s.allowLocalNetworks = allow
@@ -152,22 +154,22 @@ func TestTrackerLocalNetworks(t *testing.T) {
 						if allow {
 							return
 						}
-						t.Fatalf("tracker got %d connections or packets, want none", n)
+						t.Fatalf("endpoint got %d connections or packets, want none", n)
 					}
 					if !allow && refusalLogged(hook, addr) {
 						// The refusal comes before the connect or the send.
 						time.Sleep(100 * time.Millisecond)
 						if n := hits.Load(); n != 0 {
-							t.Fatalf("refusal logged, yet the tracker got %d connections or packets", n)
+							t.Fatalf("refusal logged, yet the endpoint got %d connections or packets", n)
 						}
 						return
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
 				if allow {
-					t.Fatal("tracker never reached with local networks allowed")
+					t.Fatal("endpoint never reached with local networks allowed")
 				}
-				t.Fatalf("no refusal logged for %s; tracker got %d", addr, hits.Load())
+				t.Fatalf("no refusal logged for %s; endpoint got %d", addr, hits.Load())
 			})
 		}
 	}
@@ -183,12 +185,12 @@ func refusalLogged(hook *logtest.Hook, addr string) bool {
 	return false
 }
 
-// httpTracker counts TCP connections, not requests: a connection that never
+// httpEndpoint counts TCP connections, not requests: a connection that never
 // sends one is already what the filter must prevent.
-func httpTracker(t *testing.T) (string, string, *atomic.Int64) {
+func httpEndpoint(t *testing.T) (string, string, *atomic.Int64) {
 	var hits atomic.Int64
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "test tracker", http.StatusNotFound)
+		http.Error(w, "test endpoint", http.StatusNotFound)
 	}))
 	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
 		if s == http.StateNew {
@@ -200,7 +202,7 @@ func httpTracker(t *testing.T) (string, string, *atomic.Int64) {
 	return srv.URL + "/announce", srv.Listener.Addr().String(), &hits
 }
 
-func udpTracker(t *testing.T) (string, string, *atomic.Int64) {
+func udpEndpoint(t *testing.T) (string, string, *atomic.Int64) {
 	var hits atomic.Int64
 	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
