@@ -40,6 +40,9 @@ type server struct {
 	// an empty DHT table, and a tracker answers in a round-trip. Same list
 	// torrent-store merges into stored torrents (DEFAULT_TRACKERS).
 	defaultTrackers []string
+	// allowLocalNetworks lets trackers be dialled at loopback, private and
+	// other non-public addresses (see dialfilter.go). Off by default.
+	allowLocalNetworks bool
 }
 
 // maxWait bounds a single resolution regardless of the caller's deadline.
@@ -98,6 +101,12 @@ func (s *server) newClient() (*torrent.Client, error) {
 	// the v6 DHT) and v6 peer dials.
 	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
+	if !s.allowLocalNetworks {
+		// Unset, the client dials with a zero net.Dialer and net.ListenPacket;
+		// these are the same plus the check.
+		cfg.TrackerDialContext = (&net.Dialer{Control: refuseLocalNetworks}).DialContext
+		cfg.TrackerListenPacket = listenPacketRefusingLocalNetworks
+	}
 	return torrent.NewClient(cfg)
 }
 
@@ -248,6 +257,11 @@ func main() {
 			Usage:  "trackers announced for every magnet on top of its own (comma- or whitespace-separated)",
 			EnvVar: "DEFAULT_TRACKERS",
 		},
+		cli.BoolFlag{
+			Name:   allowLocalNetworksFlag,
+			Usage:  "let trackers connect to loopback, private, link-local, CGNAT, multicast and unspecified addresses; refused by default, as a magnet picks the address",
+			EnvVar: allowLocalNetworksEnv,
+		},
 	})))
 	app.Action = func(c *cli.Context) error {
 		// Setting Probe
@@ -292,6 +306,7 @@ func main() {
 		}
 		// Setting server (per-request torrent clients)
 		srv := newServer(parseTrackers(c.String("default-trackers")))
+		srv.allowLocalNetworks = c.Bool(allowLocalNetworksFlag)
 
 		grpcError := make(chan error, 1)
 		go func() {
