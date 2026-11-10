@@ -29,16 +29,31 @@ GLOBAL OPTIONS:
 ## Local network addresses
 
 `--allow-local-networks` (`ALLOW_LOCAL_NETWORKS`, default `false`). Addresses
-that come from a torrent or a magnet are not connected to when they are on a
-local network: loopback, private (RFC 1918, IPv6 ULA `fc00::/7`), link-local
-(`169.254.0.0/16` with the cloud metadata address `169.254.169.254`, and
-`fe80::/10`), CGNAT (`100.64.0.0/10`), multicast or unspecified, IPv4-mapped
-forms included. The check is on the address actually connected or sent to,
-after DNS, so a name that resolves to such an address and a redirect to one
-are refused too. A refusal is logged as a warning at most once a minute per
-process, naming the refused `ip:port` and this variable; a counter counts
-every refusal. Set it to `true` when a tracker you use is on your own network.
-torrent-web-seeder and magnet2torrent read the same variable.
+that come from a torrent or a magnet are not connected to when they are not
+public:
+
+- loopback (`127.0.0.0/8`, `::1`)
+- private: RFC 1918, IPv6 ULA `fc00::/7`, and the deprecated site-local
+  `fec0::/10`
+- link-local: `169.254.0.0/16`, with the cloud metadata address
+  `169.254.169.254`, and `fe80::/10`
+- CGNAT `100.64.0.0/10`
+- unspecified and "this network" `0.0.0.0/8`, `::`
+- reserved `240.0.0.0/4`, with the broadcast address `255.255.255.255`
+- multicast
+- any of the IPv4 ones above inside IPv6: IPv4-mapped `::ffff:0:0/96`,
+  IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48` (the
+  last 32 bits), 6to4 `2002::/16` (bits 16 to 48)
+
+The check is on the address actually connected or sent to, after DNS, so a
+name that resolves to such an address and a redirect to one are refused too.
+It knows address classes, not your deployment: a node's public address, and
+the ports the node or a host-network pod listen on there, are public and
+pass. Keep those out with an egress NetworkPolicy. A refusal is logged as a
+warning at most once a minute per process, naming the refused `ip:port` and
+this variable; a counter counts every refusal. Set it to `true` when a
+tracker you use is on your own network. torrent-web-seeder and
+magnet2torrent read the same variable.
 
 In magnet2torrent it covers the trackers of a magnet (`tr=`),
 `DEFAULT_TRACKERS` and the metainfo sources a magnet names (`xs=`, `as=`):

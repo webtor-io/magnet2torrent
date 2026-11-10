@@ -31,12 +31,27 @@ func TestIsLocalNetworkAddr(t *testing.T) {
 		// IPv4-mapped forms reach the IPv4 address.
 		"::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254",
 		"::ffff:0.0.0.0", "::ffff:100.64.0.1", "::ffff:224.0.0.1",
+		// "This network", reserved and broadcast.
+		"0.0.0.1", "0.255.255.255", "240.0.0.1", "254.255.255.255", "255.255.255.255",
+		// Site-local, deprecated.
+		"fec0::1", "feff:ffff::1",
+		// NAT64 (well-known and local-use prefix), 6to4 and IPv4-compatible
+		// forms are judged by the IPv4 address they carry. The low 32 bits of
+		// the first 6to4 one are public, so only the right offset refuses it.
+		"64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::6440:1",
+		"64:ff9b:1::7f00:1", "64:ff9b:1::a00:1",
+		"2002:a00:1::c000:201", "2002:7f00:1::", "2002:a9fe:a9fe::1",
+		"::7f00:1", "::a00:1", "::a9fe:a9fe",
 	}
 	allowed := []string{
 		"192.0.2.1", "198.51.100.1", "203.0.113.1", "2001:db8::1",
 		// Just outside the refused ranges.
 		"100.63.255.255", "100.128.0.0", "172.15.255.255", "172.32.0.0",
 		"169.253.255.255", "126.255.255.255", "::ffff:192.0.2.1",
+		"1.0.0.0", "223.255.255.255",
+		// A public IPv4 address carried in IPv6; the 6to4 one has a local
+		// address in its low 32 bits, which are not where 6to4 carries it.
+		"64:ff9b::c000:201", "64:ff9b:1::c000:201", "2002:c000:201::a00:1", "::c000:201",
 	}
 	for _, s := range refused {
 		if !isLocalNetworkAddr(netip.MustParseAddr(s)) {
