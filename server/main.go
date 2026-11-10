@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -113,12 +114,21 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		}
 	}()
 
-	log.WithField("magnet", in.Magnet).Info("processing new request")
+	// Neither the magnet nor a parse error is logged or returned (the logging
+	// interceptor logs what is returned): a tr= can carry a private tracker's
+	// passkey, in the query or in the path. The parse errors quote the input,
+	// url.Parse all of it and the infohash parser the xt value, which an
+	// escaped separator stretches over the rest of the magnet.
+	m, err := metainfo.ParseMagnetV2Uri(in.Magnet)
+	if err != nil {
+		log.WithField("len", len(in.Magnet)).Error("failed parsing magnet")
+		return nil, errors.New("failed parsing magnet")
+	}
+	log.WithField("infoHash", m.InfoHash.Value.HexString()).Info("processing new request")
 
 	// AddMagnet parses the same way and then panics ("is zero") on a zero v1
-	// info-hash: an all-zero btih, or none (v2-only). A parse error is left
-	// to AddMagnet.
-	if m, err := metainfo.ParseMagnetV2Uri(in.Magnet); err == nil && m.InfoHash.Value.IsZero() {
+	// info-hash: an all-zero btih, or none (v2-only).
+	if m.InfoHash.Value.IsZero() {
 		return nil, status.Error(codes.InvalidArgument, "magnet has no non-zero btih info-hash")
 	}
 
@@ -172,8 +182,8 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	grpcLog := log.WithFields(log.Fields{})
 	// No payload interceptors: the reply is the whole .torrent, and logging it
 	// produced 13 MB lines that Loki rejects (burst 6 MiB) while promtail
-	// stalls the whole node's shipping in backoff. The magnet is logged by
-	// the handler.
+	// stalls the whole node's shipping in backoff. Nor the request: the
+	// magnet can carry a tracker passkey; the handler logs its infohash.
 	// The metrics interceptor is outermost so that it observes the final
 	// status, including a panic that grpc_recovery (innermost) turned into
 	// codes.Internal.
