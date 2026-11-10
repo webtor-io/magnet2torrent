@@ -35,11 +35,15 @@ func TestIsLocalNetworkAddr(t *testing.T) {
 		"0.0.0.1", "0.255.255.255", "240.0.0.1", "254.255.255.255", "255.255.255.255",
 		// Site-local, deprecated.
 		"fec0::1", "feff:ffff::1",
-		// NAT64 (well-known and local-use prefix), 6to4 and IPv4-compatible
-		// forms are judged by the IPv4 address they carry. The low 32 bits of
-		// the first 6to4 one are public, so only the right offset refuses it.
+		// NAT64 local-use (RFC 8215): the whole /48, whatever it carries and
+		// wherever. 64:ff9b:1:a01:2:300:c000:201 has 10.1.2.3 at the /48
+		// offset (bits 48-63 and 72-87) and a public address in the low 32 bits.
+		"64:ff9b:1::", "64:ff9b:1::a00:1", "64:ff9b:1::c000:201",
+		"64:ff9b:1:a01:2:300:c000:201", "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+		// NAT64 (well-known prefix), 6to4 and IPv4-compatible forms are
+		// judged by the IPv4 address they carry. The low 32 bits of the first
+		// 6to4 one are public, so only the right offset refuses it.
 		"64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::6440:1",
-		"64:ff9b:1::7f00:1", "64:ff9b:1::a00:1",
 		"2002:a00:1::c000:201", "2002:7f00:1::", "2002:a9fe:a9fe::1",
 		"::7f00:1", "::a00:1", "::a9fe:a9fe",
 	}
@@ -51,7 +55,10 @@ func TestIsLocalNetworkAddr(t *testing.T) {
 		"1.0.0.0", "223.255.255.255",
 		// A public IPv4 address carried in IPv6; the 6to4 one has a local
 		// address in its low 32 bits, which are not where 6to4 carries it.
-		"64:ff9b::c000:201", "64:ff9b:1::c000:201", "2002:c000:201::a00:1", "::c000:201",
+		"64:ff9b::c000:201", "2002:c000:201::a00:1", "::c000:201",
+		// Just outside the NAT64 prefixes: 10.1.2.3 in the low 32 bits is not
+		// reached outside the /96, and the local-use /48 ends on both sides.
+		"64:ff9b::1:a01:203", "64:ff9b:0:ffff:ffff:ffff:a01:203", "64:ff9b:2::a01:203",
 	}
 	for _, s := range refused {
 		if !isLocalNetworkAddr(netip.MustParseAddr(s)) {

@@ -36,6 +36,12 @@ var localPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),     // "this network" (RFC 1122)
 	netip.MustParsePrefix("240.0.0.0/4"),   // reserved, and 255.255.255.255 broadcast
 	netip.MustParsePrefix("fec0::/10"),     // site-local, deprecated (RFC 3879)
+	// NAT64 local-use (RFC 8215), refused whole rather than judged by the
+	// IPv4 address it carries: IANA marks the whole /48 as not globally
+	// reachable, and an operator may carve any prefix out of it, which puts
+	// the IPv4 address at a different offset (RFC 6052), so no one reading
+	// of it is right for every translator.
+	netip.MustParsePrefix("64:ff9b:1::/48"),
 }
 
 // ipv4In6 are the IPv6 forms that carry an IPv4 address, with the offset of
@@ -45,10 +51,9 @@ var ipv4In6 = []struct {
 	prefix netip.Prefix
 	at     int
 }{
-	{netip.MustParsePrefix("64:ff9b::/96"), 12},   // NAT64 well-known prefix (RFC 6052)
-	{netip.MustParsePrefix("64:ff9b:1::/48"), 12}, // NAT64 local-use prefix (RFC 8215), as a /96
-	{netip.MustParsePrefix("2002::/16"), 2},       // 6to4 (RFC 3056)
-	{netip.MustParsePrefix("::/96"), 12},          // IPv4-compatible (RFC 4291, deprecated)
+	{netip.MustParsePrefix("64:ff9b::/96"), 12}, // NAT64 well-known prefix (RFC 6052)
+	{netip.MustParsePrefix("2002::/16"), 2},     // 6to4 (RFC 3056)
+	{netip.MustParsePrefix("::/96"), 12},        // IPv4-compatible (RFC 4291, deprecated)
 }
 
 // isLocalNetworkAddr reports whether a connection to ip would stay on this
