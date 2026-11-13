@@ -68,8 +68,9 @@ is `m2t_local_network_refusals_total`. Peer connections are not covered.
 
 A private torrent (BEP 27, `private=1` in its info) may be announced only to
 its own trackers. Until the info arrives nobody knows whether a magnet is
-private, so the resolve announces its `tr=` and `DEFAULT_TRACKERS` as for
-any magnet. Once the info is in and it is private:
+private, so the resolve announces its `tr=` and `DEFAULT_TRACKERS` and
+looks it up in the DHT, as for any magnet. Once the info is in and it is
+private:
 
 - a magnet without `tr=`, or with only blank ones, is refused with
   `FAILED_PRECONDITION` and
