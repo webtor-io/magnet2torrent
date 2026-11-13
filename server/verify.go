@@ -27,6 +27,9 @@ const (
 	verifyInvalid     = "invalid"
 )
 
+// maxVerifyHosts bounds the hosts field of the verify log line.
+const maxVerifyHosts = 32
+
 // verifyLogger discards the tracker library's log, whose lines quote the
 // tracker URL and so the key. A zero Logger would not do: the UDP client
 // replaces it with the default one, which writes to stderr.
@@ -82,7 +85,11 @@ func (s *server) Verify(ctx context.Context, in *pb.VerifyRequest) (*pb.VerifyRe
 			}
 		}
 	}
-	verifyTotal.WithLabelValues(outcome, class).Inc()
+	// unreachable says every tracker failed; a caller that left first says
+	// nothing about them, so it is not counted.
+	if outcome != verifyUnreachable || ctx.Err() == nil {
+		verifyTotal.WithLabelValues(outcome, class).Inc()
+	}
 	log.WithFields(log.Fields{
 		"infohash": ih,
 		"hosts":    verifyHosts(urls),
@@ -97,12 +104,14 @@ func (s *server) Verify(ctx context.Context, in *pb.VerifyRequest) (*pb.VerifyRe
 // URL with a host once; nothing else can be announced to.
 func verifyURLs(tiers []*pb.VerifyTier) []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, tier := range tiers {
 		for _, u := range tier.GetUrls() {
 			p, err := url.Parse(u)
-			if err != nil || p.Hostname() == "" || !slices.Contains([]string{"http", "https", "udp"}, p.Scheme) || slices.Contains(out, u) {
+			if err != nil || p.Hostname() == "" || !slices.Contains([]string{"http", "https", "udp"}, p.Scheme) || seen[u] {
 				continue
 			}
+			seen[u] = true
 			out = append(out, u)
 		}
 	}
@@ -111,7 +120,9 @@ func verifyURLs(tiers []*pb.VerifyTier) []string {
 
 // verifyHosts names the trackers for the log by their registrable domain,
 // which drops a subdomain that could carry a key, or by their IP address.
-// A host with no registrable domain is left out.
+// A host with no registrable domain is left out. At most maxVerifyHosts are
+// listed: the request can carry any number of URLs, and a log line of many
+// megabytes is rejected by the log shipper. urls still gives the count.
 func verifyHosts(urls []string) string {
 	var hosts []string
 	for _, u := range urls {
@@ -123,6 +134,9 @@ func verifyHosts(urls []string) string {
 			}
 		}
 		if !slices.Contains(hosts, h) {
+			if len(hosts) == maxVerifyHosts {
+				break
+			}
 			hosts = append(hosts, h)
 		}
 	}

@@ -101,9 +101,10 @@ The class is the first refusal's, read from the tracker's text:
 `unregistered`, `key`, `client`, `account`, otherwise `other`. The text
 itself never leaves the process and is not logged, since a tracker can quote
 the key back; nor is a URL. A call logs one line, `verify finished`, with the
-info-hash, the trackers' registrable domains or IP addresses, the number of
-URLs, the outcome and the class. The counter is
-`m2t_verify_total{outcome, class}`.
+info-hash, the trackers' registrable domains or IP addresses (at most 32),
+the number of URLs, the outcome and the class. The counter is
+`m2t_verify_total{outcome, class}`; a call whose caller left before any
+tracker accepted or refused is not counted.
 
 What a tracker sees: the pod's IP address, the library's User-Agent, a
 `peer_id` with the library's BEP 20 prefix, a random port and `key`,

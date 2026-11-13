@@ -84,7 +84,7 @@ var (
 	// No label of the caller's: the class is all a refusal leaves behind.
 	verifyTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "m2t_verify_total",
-		Help: "Verify calls (does a tracker accept the key in its URL for a known info-hash), by outcome and, when refused, the class of the first refusal. accepted = a tracker accepted, refused = none accepted and one refused, unreachable = none accepted or refused (network, timeout, an HTTP status other than 200, a local network address), invalid = no usable info-hash or tracker URL, nothing sent.",
+		Help: "Verify calls (does a tracker accept the key in its URL for a known info-hash), by outcome and, when refused, the class of the first refusal. accepted = a tracker accepted, refused = none accepted and one refused, unreachable = none accepted or refused (network, timeout, an HTTP status other than 200, a local network address), invalid = no usable info-hash or tracker URL, nothing sent. A call whose caller left before any tracker accepted or refused is not counted.",
 	}, []string{"outcome", "class"})
 
 	// The warning is logged once a minute; this carries the volume.

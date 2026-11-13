@@ -278,8 +278,22 @@ func TestVerifyUnreachable(t *testing.T) {
 	closed := "http://" + l.Addr().String() + "/announce"
 	l.Close()
 	notFound, _, _ := httpEndpoint(t) // 404, no failure reason
+	before := verifyCount(t, verifyUnreachable, "")
 	for _, u := range []string{closed, notFound} {
 		wantReply(t, verify(t, s, verifyIH, u), verifyUnreachable, "")
+	}
+
+	// A caller that has gone learned nothing about the trackers: the reply
+	// says unreachable, the metric does not count it.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reply, err := s.Verify(ctx, &pb.VerifyRequest{InfoHash: verifyIH, Trackers: []*pb.VerifyTier{{Urls: []string{notFound}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReply(t, reply, verifyUnreachable, "")
+	if d := verifyCount(t, verifyUnreachable, "") - before; d != 2 {
+		t.Fatalf("m2t_verify_total{unreachable} grew by %v, want 2 (the caller that left not counted)", d)
 	}
 }
 
@@ -393,10 +407,13 @@ func TestVerifyHangingTrackerDoesNotBlockNext(t *testing.T) {
 		h, _ := fakeHTTPTracker(t, "hang", "")
 		hangs = append(hangs, h)
 	}
+	// The overall cap ends the check after about 1 s; per URL alone it would
+	// take 5 x 400 ms = 2 s.
+	s.verifyTimeout = time.Second
 	start = time.Now()
 	wantReply(t, verify(t, s, verifyIH, hangs...), verifyUnreachable, "")
-	if d := time.Since(start); d > 2200*time.Millisecond {
-		t.Errorf("five hanging trackers: %v, want <= 2.2s", d)
+	if d := time.Since(start); d >= 1500*time.Millisecond {
+		t.Errorf("five hanging trackers, overall cap 1s: %v, want < 1.5s", d)
 	}
 }
 
@@ -451,5 +468,13 @@ func TestVerifyHosts(t *testing.T) {
 	})
 	if got != "tracker.example,2001:db8::1" {
 		t.Fatalf("verifyHosts = %q, want tracker.example,2001:db8::1", got)
+	}
+
+	var many []string
+	for i := range maxVerifyHosts + 1 {
+		many = append(many, "http://t"+strconv.Itoa(i)+".example/announce")
+	}
+	if n := len(strings.Split(verifyHosts(many), ",")); n != maxVerifyHosts {
+		t.Fatalf("verifyHosts of %d domains lists %d, want %d", len(many), n, maxVerifyHosts)
 	}
 }
