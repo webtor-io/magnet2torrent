@@ -46,10 +46,14 @@ const failureReasonPrefix = "tracker gave failure reason: "
 
 // refusalText returns the tracker's text if err is a refusal: an HTTP failure
 // reason or a UDP error response. A status other than 200, an unreadable
-// reply, the network, a timeout are not.
+// reply, the network, a timeout are not, nor is a UDP connection ID
+// mismatch: that is the protocol's, not the tracker's word on the key.
 func refusalText(err error) (string, bool) {
 	var er udp.ErrorResponse
 	if errors.As(err, &er) {
+		if er.Message == udp.ConnectionIdMissmatchNul {
+			return "", false
+		}
 		return er.Message, true
 	}
 	for ; err != nil; err = errors.Unwrap(err) {

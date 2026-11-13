@@ -96,7 +96,7 @@ The reply is an `outcome` and, only when refused, a `class`:
 |---|---|
 | `accepted` | a tracker accepted |
 | `refused` | none accepted, and one answered with a failure reason (HTTP) or an error response (UDP) |
-| `unreachable` | none accepted or refused: network, timeout, an HTTP status other than 200, an unreadable reply, a local network address |
+| `unreachable` | none accepted or refused: network, timeout, an HTTP status other than 200, an unreadable reply, a UDP connection ID mismatch, a local network address |
 | `invalid` | the info-hash is not 40 hex digits or no URL is usable; nothing is sent |
 
 The class is the first refusal's, read from the tracker's text:

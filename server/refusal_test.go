@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	alog "github.com/anacrolix/log"
 	"github.com/anacrolix/torrent/tracker/udp"
 )
 
@@ -52,6 +53,9 @@ func TestRefusalText(t *testing.T) {
 		{"http, sentinel", fmt.Errorf("%w: %q", errors.New("tracker gave failure reason"), "Invalid passkey"), "Invalid passkey", true},
 		{"udp", udp.ErrorResponse{Message: "Unregistered torrent"}, "Unregistered torrent", true},
 		{"udp, wrapped", fmt.Errorf("announce: %w", udp.ErrorResponse{Message: "Unregistered torrent"}), "Unregistered torrent", true},
+		// A stale connection ID, as the fork returns it: the protocol's word,
+		// not the tracker's on the key.
+		{"udp, connection id mismatch", alog.WithLevel(alog.Debug, udp.ErrorResponse{Message: udp.ConnectionIdMissmatchNul}), "", false},
 		{"http status", errors.New("response from tracker: 403 Forbidden: 0 bytes"), "", false},
 		{"timeout", context.DeadlineExceeded, "", false},
 		{"dial", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}, "", false},
