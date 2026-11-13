@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -188,13 +189,37 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	}
 
 	mi := t.Metainfo()
+	// BEP 27: a private torrent is announced only to its own trackers. Up to
+	// here the resolve announced DEFAULT_TRACKERS too, which only learn the
+	// infohash; the metainfo must not hand them on.
+	private := t.Info().Private != nil && *t.Info().Private
+	if private {
+		ih := t.InfoHash().HexString()
+		if len(m.Trackers) == 0 {
+			log.WithField("infoHash", ih).Info("private magnet refused")
+			return nil, errPrivateMagnet
+		}
+		mi = privateMetainfo(mi, m.Trackers)
+		log.WithFields(log.Fields{"infoHash": ih, "urls": len(m.Trackers)}).Info("private magnet resolved with its own trackers")
+	}
 	bytes, err := bencode.Marshal(mi)
 	if err != nil {
 		log.WithError(err).Error("failed bencoding torrent metainfo")
 		return nil, err
 	}
 	log.WithField("len", len(bytes)).Info("sending response")
-	return &pb.Magnet2TorrentReply{Torrent: bytes}, nil
+	return &pb.Magnet2TorrentReply{Torrent: bytes, Private: private}, nil
+}
+
+// privateMetainfo keeps only the magnet's own trackers, as one tier in the
+// magnet's order with its duplicates, and no web seeds. The resolving client
+// sets neither the announce key nor web seeds (DisableWebseeds); both are
+// cleared anyway, so that the rule does not hang on the client's config.
+func privateMetainfo(mi metainfo.MetaInfo, trackers []string) metainfo.MetaInfo {
+	mi.Announce = ""
+	mi.AnnounceList = [][]string{slices.Clone(trackers)}
+	mi.UrlList = nil
+	return mi
 }
 
 // newGRPCServer builds the server with the full interceptor chain. Shared
