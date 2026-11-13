@@ -49,6 +49,11 @@ type server struct {
 	// refusalWarn lets one refusal a minute be logged. Shared by the
 	// per-request clients, so the limit holds for the process.
 	refusalWarn *rate.Limiter
+	// Verify: verifyTimeout bounds its started announces together,
+	// verifyURLTimeout each one, so that a tracker that never answers leaves
+	// time for the next; verifyStopTimeout bounds the stopped sent after an
+	// accepted one.
+	verifyTimeout, verifyURLTimeout, verifyStopTimeout time.Duration
 }
 
 // maxWait bounds a single resolution regardless of the caller's deadline.
@@ -93,9 +98,22 @@ func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok:
 
 func newServer(defaultTrackers []string) *server {
 	return &server{
-		defaultTrackers: defaultTrackers,
-		refusalWarn:     rate.NewLimiter(rate.Every(time.Minute), 1),
+		defaultTrackers:   defaultTrackers,
+		refusalWarn:       rate.NewLimiter(rate.Every(time.Minute), 1),
+		verifyTimeout:     15 * time.Second,
+		verifyURLTimeout:  5 * time.Second,
+		verifyStopTimeout: 5 * time.Second,
 	}
+}
+
+// trackerDialers are what trackers and metainfo sources are dialled with:
+// nil, the library's own (a zero net.Dialer and net.ListenPacket), when local
+// networks are allowed, otherwise the same plus the check.
+func (s *server) trackerDialers() (dial func(ctx context.Context, network, addr string) (net.Conn, error), listen func(network, addr string) (net.PacketConn, error)) {
+	if s.allowLocalNetworks {
+		return nil, nil
+	}
+	return (&net.Dialer{Control: s.refuseLocalNetworks}).DialContext, s.listenPacketRefusingLocalNetworks
 }
 
 func (s *server) newClient() (*torrent.Client, error) {
@@ -110,16 +128,10 @@ func (s *server) newClient() (*torrent.Client, error) {
 	// the v6 DHT) and v6 peer dials.
 	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
-	if !s.allowLocalNetworks {
-		// Unset, the client dials with a zero net.Dialer and net.ListenPacket;
-		// these are the same plus the check. HTTPDialContext serves the
-		// metainfo sources (a magnet's xs= and as=), fetched like a tracker
-		// from wherever the magnet says.
-		d := &net.Dialer{Control: s.refuseLocalNetworks}
-		cfg.TrackerDialContext = d.DialContext
-		cfg.TrackerListenPacket = s.listenPacketRefusingLocalNetworks
-		cfg.HTTPDialContext = d.DialContext
-	}
+	// HTTPDialContext serves the metainfo sources (a magnet's xs= and as=),
+	// fetched like a tracker from wherever the magnet says.
+	cfg.TrackerDialContext, cfg.TrackerListenPacket = s.trackerDialers()
+	cfg.HTTPDialContext = cfg.TrackerDialContext
 	return torrent.NewClient(cfg)
 }
 

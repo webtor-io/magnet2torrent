@@ -81,6 +81,12 @@ var (
 		Help: "Magnet resolutions currently running; each holds its own torrent client and DHT node.",
 	})
 
+	// No label of the caller's: the class is all a refusal leaves behind.
+	verifyTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "m2t_verify_total",
+		Help: "Verify calls (does a tracker accept the key in its URL for a known info-hash), by outcome and, when refused, the class of the first refusal. accepted = a tracker accepted, refused = none accepted and one refused, unreachable = none accepted or refused (network, timeout, an HTTP status other than 200, a local network address), invalid = no usable info-hash or tracker URL, nothing sent.",
+	}, []string{"outcome", "class"})
+
 	// The warning is logged once a minute; this carries the volume.
 	localNetworkRefusals = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "m2t_local_network_refusals_total",
@@ -89,13 +95,19 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight, localNetworkRefusals)
+	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight, verifyTotal, localNetworkRefusals)
 	// The label set is closed, so every series can exist from the start:
 	// a dashboard then shows 0 rather than "no data", and rate() over a
 	// counter that appears mid-window does not miss its first increment.
 	for _, o := range []string{outcomeOK, outcomeTimeout, outcomeCanceled, outcomeInvalid, outcomePrivateRefused, outcomeError} {
 		resolveTotal.WithLabelValues(o)
 		resolveSeconds.WithLabelValues(o)
+	}
+	for _, o := range []string{verifyAccepted, verifyUnreachable, verifyInvalid} {
+		verifyTotal.WithLabelValues(o, "")
+	}
+	for _, c := range []string{classKey, classAccount, classUnregistered, classClient, classOther} {
+		verifyTotal.WithLabelValues(verifyRefused, c)
 	}
 }
 

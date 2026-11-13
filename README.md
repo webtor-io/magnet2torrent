@@ -60,9 +60,56 @@ tracker you use is on your own network. torrent-web-seeder and
 magnet2torrent read the same variable.
 
 In magnet2torrent it covers the trackers of a magnet (`tr=`),
-`DEFAULT_TRACKERS` and the metainfo sources a magnet names (`xs=`, `as=`):
-HTTP on connect, UDP on every send. The counter is
-`m2t_local_network_refusals_total`. Peer connections are not covered.
+`DEFAULT_TRACKERS`, the trackers `Verify` is given and the metainfo sources a
+magnet names (`xs=`, `as=`): HTTP on connect, UDP on every send. The counter
+is `m2t_local_network_refusals_total`. Peer connections are not covered.
+
+## Private magnets and Verify
+
+A private torrent (BEP 27, `private=1` in its info) may be announced only to
+its own trackers. Until the info arrives nobody knows whether a magnet is
+private, so the resolve announces its `tr=` and `DEFAULT_TRACKERS` as for
+any magnet. Once the info is in and it is private:
+
+- a magnet without `tr=` is refused with `FAILED_PRECONDITION` and
+  `ErrorInfo{domain: "magnet2torrent", reason: "private_magnet"}`, counted as
+  `m2t_resolve_total{outcome="private_refused"}`;
+- a magnet with `tr=` gets a torrent whose announce list is exactly its
+  `tr=`, as one tier in the magnet's order, with neither `DEFAULT_TRACKERS`
+  nor web seeds, and the reply says `private: true`.
+
+`Verify(info_hash, trackers)` checks that a tracker accepts the key in its
+URL for a known info-hash. It needs neither the info nor peers and runs no
+torrent client: no DHT, no PEX, no `DEFAULT_TRACKERS`, only the trackers
+given. Of those it keeps the `http`, `https` and `udp` URLs with a host,
+each once, in tier order. One URL at a time it sends one `started` announce
+with `numwant=0`; the first tracker that accepts gets a `stopped` from the
+same peer (`peer_id`, `key`, port), which ends the check. A URL gets at most
+5 s, all of them together 15 s, and the `stopped` 5 s more, sent even when
+the caller has gone: give the call a deadline of at least 20 s.
+
+The reply is an `outcome` and, only when refused, a `class`:
+
+| `outcome` | when |
+|---|---|
+| `accepted` | a tracker accepted |
+| `refused` | none accepted, and one answered with a failure reason (HTTP) or an error response (UDP) |
+| `unreachable` | none accepted or refused: network, timeout, an HTTP status other than 200, an unreadable reply, a local network address |
+| `invalid` | the info-hash is not 40 hex digits or no URL is usable; nothing is sent |
+
+The class is the first refusal's, read from the tracker's text:
+`unregistered`, `key`, `client`, `account`, otherwise `other`. The text
+itself never leaves the process and is not logged, since a tracker can quote
+the key back; nor is a URL. A call logs one line, `verify finished`, with the
+info-hash, the trackers' registrable domains or IP addresses, the number of
+URLs, the outcome and the class. The counter is
+`m2t_verify_total{outcome, class}`.
+
+What a tracker sees: the pod's IP address, the library's User-Agent, a
+`peer_id` with the library's BEP 20 prefix, a random port and `key`,
+`uploaded` and `downloaded` 0, and `left` unknown (2^63-1 over HTTP). For
+the account behind the key this is a short session in which nothing was
+downloaded.
 
 ## Client usage
 
