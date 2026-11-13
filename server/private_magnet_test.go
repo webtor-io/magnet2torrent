@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,11 +14,16 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 const (
@@ -119,6 +125,48 @@ func TestPrivateMagnetWithoutTrackersRefused(t *testing.T) {
 				t.Fatalf("m2t_resolve_total%v: got +%v, want +0", failed, got)
 			}
 		})
+	}
+}
+
+// The refusal is the caller's doing, so the logging interceptor writes it at
+// Info, not at its default Warn for FailedPrecondition.
+func TestPrivateMagnetRefusalLoggedAtInfo(t *testing.T) {
+	ih, peer := seedTorrent(t, new(true))
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	lis := bufconn.Listen(1 << 20)
+	g := newGRPCServer(newServer([]string{def}))
+	go func() { _ = g.Serve(lis) }()
+	defer g.Stop()
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = pb.NewMagnet2TorrentClient(conn).Magnet2Torrent(ctx, &pb.Magnet2TorrentRequest{Magnet: "magnet:?xt=urn:btih:" + ih + "&x.pe=" + peer})
+	if c := status.Code(err); c != codes.FailedPrecondition {
+		t.Fatalf("code %v (%v), want FailedPrecondition", c, err)
+	}
+	// The interceptor logs after the reply is sent; GracefulStop waits for it.
+	conn.Close()
+	g.GracefulStop()
+
+	found := false
+	for _, e := range hook.AllEntries() {
+		if e.Data["grpc.code"] == codes.FailedPrecondition.String() {
+			found = true
+			if e.Level != log.InfoLevel {
+				t.Errorf("interceptor line at %v, want info", e.Level)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no interceptor line with grpc.code FailedPrecondition")
 	}
 }
 

@@ -246,6 +246,14 @@ func privateMetainfo(mi metainfo.MetaInfo, trackers []string) metainfo.MetaInfo 
 // with the tests so that what they measure is what production runs.
 func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	grpcLog := log.WithFields(log.Fields{})
+	// A refused private magnet (FailedPrecondition, m2t's only one) is the
+	// caller's doing, not a fault: Info, not the default Warn.
+	levels := grpc_logrus.WithLevels(func(c codes.Code) log.Level {
+		if c == codes.FailedPrecondition {
+			return log.InfoLevel
+		}
+		return grpc_logrus.DefaultCodeToLevel(c)
+	})
 	// No payload interceptors: the reply is the whole .torrent, and logging it
 	// produced 13 MB lines that Loki rejects (burst 6 MiB) while promtail
 	// stalls the whole node's shipping in backoff. Nor the request: the
@@ -257,13 +265,13 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
 			grpcMetrics.StreamServerInterceptor(),
 			grpc_ctxtags.StreamServerInterceptor(),
-			grpc_logrus.StreamServerInterceptor(grpcLog),
+			grpc_logrus.StreamServerInterceptor(grpcLog, levels),
 			grpc_recovery.StreamServerInterceptor(),
 		)),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
 			grpcMetrics.UnaryServerInterceptor(),
 			grpc_ctxtags.UnaryServerInterceptor(),
-			grpc_logrus.UnaryServerInterceptor(grpcLog),
+			grpc_logrus.UnaryServerInterceptor(grpcLog, levels),
 			grpc_recovery.UnaryServerInterceptor(),
 		)),
 		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
