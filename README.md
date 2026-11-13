@@ -91,6 +91,11 @@ same peer (`peer_id`, `key`, port), which ends the check. A URL gets at most
 5 s, all of them together 15 s, and the `stopped` 5 s more, sent even when
 the caller has gone: give the call a deadline of at least 20 s.
 
+`accepted` proves only that one of the given trackers accepted an announce
+for this info-hash. An open tracker accepts any info-hash, so the check does
+not prove that the caller holds a key on the tracker where the torrent is
+registered.
+
 The reply is an `outcome` and, only when refused, a `class`:
 
 | `outcome` | when |
