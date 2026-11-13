@@ -85,47 +85,53 @@ func unmarshalReply(t *testing.T, reply *pb.Magnet2TorrentReply) *metainfo.MetaI
 }
 
 // A private torrent may be announced only to its own trackers (BEP 27), and
-// a magnet without tr= has none: there is nothing to hand out.
+// a magnet without tr= has none: there is nothing to hand out. Nor has one
+// whose tr= are blank.
 func TestPrivateMagnetWithoutTrackersRefused(t *testing.T) {
 	ih, peer := seedTorrent(t, new(true))
 	refused := map[string]string{"outcome": outcomePrivateRefused}
 	failed := map[string]string{"outcome": outcomeError}
-	refusedBefore := counterValue(t, "m2t_resolve_total", refused)
-	failedBefore := counterValue(t, "m2t_resolve_total", failed)
+	for name, extra := range map[string]string{"no tr=": "", "blank tr=": "&tr=&tr=%20"} {
+		t.Run(name, func(t *testing.T) {
+			refusedBefore := counterValue(t, "m2t_resolve_total", refused)
+			failedBefore := counterValue(t, "m2t_resolve_total", failed)
 
-	_, err := resolve(t, "magnet:?xt=urn:btih:"+ih+"&x.pe="+peer)
-	if c := status.Code(err); c != codes.FailedPrecondition {
-		t.Fatalf("code %v (%v), want FailedPrecondition", c, err)
-	}
-	found := false
-	for _, d := range status.Convert(err).Details() {
-		if ei, ok := d.(*errdetails.ErrorInfo); ok && ei.Domain == "magnet2torrent" && ei.Reason == "private_magnet" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("no ErrorInfo{magnet2torrent, private_magnet} in %v", status.Convert(err).Details())
-	}
-	if o := resolveOutcome(err); o != outcomePrivateRefused {
-		t.Fatalf("outcome %q, want %q", o, outcomePrivateRefused)
-	}
-	if got := counterValue(t, "m2t_resolve_total", refused) - refusedBefore; got != 1 {
-		t.Fatalf("m2t_resolve_total%v: got +%v, want +1", refused, got)
-	}
-	if got := counterValue(t, "m2t_resolve_total", failed) - failedBefore; got != 0 {
-		t.Fatalf("m2t_resolve_total%v: got +%v, want +0", failed, got)
+			_, err := resolve(t, "magnet:?xt=urn:btih:"+ih+"&x.pe="+peer+extra)
+			if c := status.Code(err); c != codes.FailedPrecondition {
+				t.Fatalf("code %v (%v), want FailedPrecondition", c, err)
+			}
+			found := false
+			for _, d := range status.Convert(err).Details() {
+				if ei, ok := d.(*errdetails.ErrorInfo); ok && ei.Domain == "magnet2torrent" && ei.Reason == "private_magnet" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no ErrorInfo{magnet2torrent, private_magnet} in %v", status.Convert(err).Details())
+			}
+			if o := resolveOutcome(err); o != outcomePrivateRefused {
+				t.Fatalf("outcome %q, want %q", o, outcomePrivateRefused)
+			}
+			if got := counterValue(t, "m2t_resolve_total", refused) - refusedBefore; got != 1 {
+				t.Fatalf("m2t_resolve_total%v: got +%v, want +1", refused, got)
+			}
+			if got := counterValue(t, "m2t_resolve_total", failed) - failedBefore; got != 0 {
+				t.Fatalf("m2t_resolve_total%v: got +%v, want +0", failed, got)
+			}
+		})
 	}
 }
 
 // A private magnet with tr= gets exactly its own trackers, in its order and
-// with its duplicates: no DEFAULT_TRACKERS, no web seeds.
+// with its duplicates, trimmed, blanks dropped: no DEFAULT_TRACKERS, no web
+// seeds.
 func TestPrivateMagnetKeepsOnlyItsTrackers(t *testing.T) {
 	ih, peer := seedTorrent(t, new(true))
 	ok := map[string]string{"outcome": outcomeOK}
 	okBefore := counterValue(t, "m2t_resolve_total", ok)
 
 	magnet := "magnet:?xt=urn:btih:" + ih + "&x.pe=" + peer + "&tr=" + url.QueryEscape(tr1) +
-		"&tr=" + url.QueryEscape(tr2) + "&tr=" + url.QueryEscape(tr1) + "&ws=" + url.QueryEscape("http://seed.invalid/")
+		"&tr=" + url.QueryEscape(tr2) + "&tr=&tr=" + url.QueryEscape(" "+tr1+" ") + "&ws=" + url.QueryEscape("http://seed.invalid/")
 	reply, err := resolve(t, magnet)
 	if err != nil {
 		t.Fatal(err)

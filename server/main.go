@@ -207,12 +207,20 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	private := t.Info().Private != nil && *t.Info().Private
 	if private {
 		ih := t.InfoHash().HexString()
-		if len(m.Trackers) == 0 {
+		// Trimmed, blanks dropped, as rest-api reads the magnet's tr=: a
+		// blank tr= is no tracker.
+		var trackers []string
+		for _, tr := range m.Trackers {
+			if tr = strings.TrimSpace(tr); tr != "" {
+				trackers = append(trackers, tr)
+			}
+		}
+		if len(trackers) == 0 {
 			log.WithField("infoHash", ih).Info("private magnet refused")
 			return nil, errPrivateMagnet
 		}
-		mi = privateMetainfo(mi, m.Trackers)
-		log.WithFields(log.Fields{"infoHash": ih, "urls": len(m.Trackers)}).Info("private magnet resolved with its own trackers")
+		mi = privateMetainfo(mi, trackers)
+		log.WithFields(log.Fields{"infoHash": ih, "urls": len(trackers)}).Info("private magnet resolved with its own trackers")
 	}
 	bytes, err := bencode.Marshal(mi)
 	if err != nil {

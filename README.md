@@ -71,12 +71,14 @@ its own trackers. Until the info arrives nobody knows whether a magnet is
 private, so the resolve announces its `tr=` and `DEFAULT_TRACKERS` as for
 any magnet. Once the info is in and it is private:
 
-- a magnet without `tr=` is refused with `FAILED_PRECONDITION` and
+- a magnet without `tr=`, or with only blank ones, is refused with
+  `FAILED_PRECONDITION` and
   `ErrorInfo{domain: "magnet2torrent", reason: "private_magnet"}`, counted as
   `m2t_resolve_total{outcome="private_refused"}`;
 - a magnet with `tr=` gets a torrent whose announce list is exactly its
-  `tr=`, as one tier in the magnet's order, with neither `DEFAULT_TRACKERS`
-  nor web seeds, and the reply says `private: true`.
+  `tr=`, trimmed and without blanks, as one tier in the magnet's order, with
+  neither `DEFAULT_TRACKERS` nor web seeds, and the reply says
+  `private: true`.
 
 `Verify(info_hash, trackers)` checks that a tracker accepts the key in its
 URL for a known info-hash. It needs neither the info nor peers and runs no
