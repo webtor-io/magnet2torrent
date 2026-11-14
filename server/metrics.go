@@ -7,6 +7,7 @@ import (
 	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/context"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -32,12 +33,15 @@ var grpcMetrics = grpcprom.NewServerMetrics(
 // (2 days to 2026-10-15: 47% canceled, 0 timeout; 88% of the canceled ones
 // ended between 30 and 60 s). Invalid is the caller's mistake (a zero
 // info-hash), not a fault either; in those 2 days it was all of error (3).
+// Private refused is a private torrent's magnet without trackers of its own:
+// resolved fine, but there is nothing it may be announced to.
 const (
-	outcomeOK       = "ok"
-	outcomeTimeout  = "timeout"
-	outcomeCanceled = "canceled"
-	outcomeInvalid  = "invalid"
-	outcomeError    = "error"
+	outcomeOK             = "ok"
+	outcomeTimeout        = "timeout"
+	outcomeCanceled       = "canceled"
+	outcomeInvalid        = "invalid"
+	outcomePrivateRefused = "private_refused"
+	outcomeError          = "error"
 )
 
 // errResolveTooLong is the 10-minute cap. It is a package variable so the
@@ -45,10 +49,22 @@ const (
 // which nothing else in this server produces today but could tomorrow.
 var errResolveTooLong = status.Error(codes.Aborted, "fetching torrent takes too long")
 
+// errPrivateMagnet refuses a private torrent (BEP 27) whose magnet has no tr=:
+// it may be announced only to its own trackers. The caller tells it from other
+// failures by the ErrorInfo reason, the outcome mapping by identity.
+var errPrivateMagnet = func() error {
+	st, err := status.New(codes.FailedPrecondition, "private torrent: a magnet without trackers of its own cannot be resolved").
+		WithDetails(&errdetails.ErrorInfo{Domain: "magnet2torrent", Reason: "private_magnet"})
+	if err != nil {
+		panic(err)
+	}
+	return st.Err()
+}()
+
 var (
 	resolveTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "m2t_resolve_total",
-		Help: "Magnet resolutions finished, by outcome. timeout = nobody in the swarm answered before the deadline (dead magnet), canceled = the caller (web-ui, 60 s) gave up waiting, mostly dead magnets too, not a service failure, invalid = the caller sent an unusable magnet (zero info-hash), error = the service itself failed.",
+		Help: "Magnet resolutions finished, by outcome. timeout = nobody in the swarm answered before the deadline (dead magnet), canceled = the caller (web-ui, 60 s) gave up waiting, mostly dead magnets too, not a service failure, invalid = the caller sent an unusable magnet (zero info-hash), private_refused = a private torrent's magnet without trackers of its own, error = the service itself failed.",
 	}, []string{"outcome"})
 
 	// Labelled by outcome so that the latency of successful resolves is
@@ -65,6 +81,12 @@ var (
 		Help: "Magnet resolutions currently running; each holds its own torrent client and DHT node.",
 	})
 
+	// No label of the caller's: the class is all a refusal leaves behind.
+	verifyTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "m2t_verify_total",
+		Help: "Verify calls (does a tracker accept the key in its URL for a known info-hash), by outcome and, when refused, the class of the first refusal. accepted = a tracker accepted, refused = none accepted and one refused, unreachable = none accepted or refused (network, timeout, an HTTP status other than 200, a local network address), invalid = no usable info-hash or tracker URL, nothing sent. A call whose caller left before any tracker accepted or refused is not counted.",
+	}, []string{"outcome", "class"})
+
 	// The warning is logged once a minute; this carries the volume.
 	localNetworkRefusals = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "m2t_local_network_refusals_total",
@@ -73,13 +95,19 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight, localNetworkRefusals)
+	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight, verifyTotal, localNetworkRefusals)
 	// The label set is closed, so every series can exist from the start:
 	// a dashboard then shows 0 rather than "no data", and rate() over a
 	// counter that appears mid-window does not miss its first increment.
-	for _, o := range []string{outcomeOK, outcomeTimeout, outcomeCanceled, outcomeInvalid, outcomeError} {
+	for _, o := range []string{outcomeOK, outcomeTimeout, outcomeCanceled, outcomeInvalid, outcomePrivateRefused, outcomeError} {
 		resolveTotal.WithLabelValues(o)
 		resolveSeconds.WithLabelValues(o)
+	}
+	for _, o := range []string{verifyAccepted, verifyUnreachable, verifyInvalid} {
+		verifyTotal.WithLabelValues(o, "")
+	}
+	for _, c := range []string{classKey, classAccount, classUnregistered, classClient, classOther} {
+		verifyTotal.WithLabelValues(verifyRefused, c)
 	}
 }
 
@@ -103,6 +131,8 @@ func resolveOutcome(err error) string {
 	switch {
 	case err == nil:
 		return outcomeOK
+	case errors.Is(err, errPrivateMagnet):
+		return outcomePrivateRefused
 	case errors.Is(err, errResolveTooLong), errors.Is(err, context.DeadlineExceeded):
 		return outcomeTimeout
 	case errors.Is(err, context.Canceled):

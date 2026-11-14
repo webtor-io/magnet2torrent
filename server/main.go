@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -48,6 +49,11 @@ type server struct {
 	// refusalWarn lets one refusal a minute be logged. Shared by the
 	// per-request clients, so the limit holds for the process.
 	refusalWarn *rate.Limiter
+	// Verify: verifyTimeout bounds its started announces together,
+	// verifyURLTimeout each one, so that a tracker that never answers leaves
+	// time for the next; verifyStopTimeout bounds the stopped sent after an
+	// accepted one.
+	verifyTimeout, verifyURLTimeout, verifyStopTimeout time.Duration
 }
 
 // maxWait bounds a single resolution regardless of the caller's deadline.
@@ -92,9 +98,22 @@ func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok:
 
 func newServer(defaultTrackers []string) *server {
 	return &server{
-		defaultTrackers: defaultTrackers,
-		refusalWarn:     rate.NewLimiter(rate.Every(time.Minute), 1),
+		defaultTrackers:   defaultTrackers,
+		refusalWarn:       rate.NewLimiter(rate.Every(time.Minute), 1),
+		verifyTimeout:     15 * time.Second,
+		verifyURLTimeout:  5 * time.Second,
+		verifyStopTimeout: 5 * time.Second,
 	}
+}
+
+// trackerDialers are what trackers and metainfo sources are dialled with:
+// nil, the library's own (a zero net.Dialer and net.ListenPacket), when local
+// networks are allowed, otherwise the same plus the check.
+func (s *server) trackerDialers() (dial func(ctx context.Context, network, addr string) (net.Conn, error), listen func(network, addr string) (net.PacketConn, error)) {
+	if s.allowLocalNetworks {
+		return nil, nil
+	}
+	return (&net.Dialer{Control: s.refuseLocalNetworks}).DialContext, s.listenPacketRefusingLocalNetworks
 }
 
 func (s *server) newClient() (*torrent.Client, error) {
@@ -109,16 +128,10 @@ func (s *server) newClient() (*torrent.Client, error) {
 	// the v6 DHT) and v6 peer dials.
 	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
-	if !s.allowLocalNetworks {
-		// Unset, the client dials with a zero net.Dialer and net.ListenPacket;
-		// these are the same plus the check. HTTPDialContext serves the
-		// metainfo sources (a magnet's xs= and as=), fetched like a tracker
-		// from wherever the magnet says.
-		d := &net.Dialer{Control: s.refuseLocalNetworks}
-		cfg.TrackerDialContext = d.DialContext
-		cfg.TrackerListenPacket = s.listenPacketRefusingLocalNetworks
-		cfg.HTTPDialContext = d.DialContext
-	}
+	// HTTPDialContext serves the metainfo sources (a magnet's xs= and as=),
+	// fetched like a tracker from wherever the magnet says.
+	cfg.TrackerDialContext, cfg.TrackerListenPacket = s.trackerDialers()
+	cfg.HTTPDialContext = cfg.TrackerDialContext
 	return torrent.NewClient(cfg)
 }
 
@@ -188,19 +201,59 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 	}
 
 	mi := t.Metainfo()
+	// BEP 27: a private torrent is announced only to its own trackers. Up to
+	// here the resolve announced DEFAULT_TRACKERS too, which only learn the
+	// infohash; the metainfo must not hand them on.
+	private := t.Info().Private != nil && *t.Info().Private
+	if private {
+		ih := t.InfoHash().HexString()
+		// Trimmed, blanks dropped, as rest-api reads the magnet's tr=: a
+		// blank tr= is no tracker.
+		var trackers []string
+		for _, tr := range m.Trackers {
+			if tr = strings.TrimSpace(tr); tr != "" {
+				trackers = append(trackers, tr)
+			}
+		}
+		if len(trackers) == 0 {
+			log.WithField("infoHash", ih).Info("private magnet refused")
+			return nil, errPrivateMagnet
+		}
+		mi = privateMetainfo(mi, trackers)
+		log.WithFields(log.Fields{"infoHash": ih, "urls": len(trackers)}).Info("private magnet resolved with its own trackers")
+	}
 	bytes, err := bencode.Marshal(mi)
 	if err != nil {
 		log.WithError(err).Error("failed bencoding torrent metainfo")
 		return nil, err
 	}
 	log.WithField("len", len(bytes)).Info("sending response")
-	return &pb.Magnet2TorrentReply{Torrent: bytes}, nil
+	return &pb.Magnet2TorrentReply{Torrent: bytes, Private: private}, nil
+}
+
+// privateMetainfo keeps only the magnet's own trackers, as one tier in the
+// magnet's order with its duplicates, and no web seeds. The resolving client
+// sets neither the announce key nor web seeds (DisableWebseeds); both are
+// cleared anyway, so that the rule does not hang on the client's config.
+func privateMetainfo(mi metainfo.MetaInfo, trackers []string) metainfo.MetaInfo {
+	mi.Announce = ""
+	mi.AnnounceList = [][]string{slices.Clone(trackers)}
+	mi.UrlList = nil
+	return mi
 }
 
 // newGRPCServer builds the server with the full interceptor chain. Shared
 // with the tests so that what they measure is what production runs.
 func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	grpcLog := log.WithFields(log.Fields{})
+	// A refused private magnet (FailedPrecondition, m2t's only one) is the
+	// caller's doing, not a fault: Info, not the default Warn.
+	levels := grpc_logrus.WithLevels(func(c codes.Code) log.Level {
+		if c == codes.FailedPrecondition {
+			return log.InfoLevel
+		}
+		return grpc_logrus.DefaultCodeToLevel(c)
+	})
 	// No payload interceptors: the reply is the whole .torrent, and logging it
 	// produced 13 MB lines that Loki rejects (burst 6 MiB) while promtail
 	// stalls the whole node's shipping in backoff. Nor the request: the
@@ -212,13 +265,13 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
 			grpcMetrics.StreamServerInterceptor(),
 			grpc_ctxtags.StreamServerInterceptor(),
-			grpc_logrus.StreamServerInterceptor(grpcLog),
+			grpc_logrus.StreamServerInterceptor(grpcLog, levels),
 			grpc_recovery.StreamServerInterceptor(),
 		)),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
 			grpcMetrics.UnaryServerInterceptor(),
 			grpc_ctxtags.UnaryServerInterceptor(),
-			grpc_logrus.UnaryServerInterceptor(grpcLog),
+			grpc_logrus.UnaryServerInterceptor(grpcLog, levels),
 			grpc_recovery.UnaryServerInterceptor(),
 		)),
 		grpc.MaxRecvMsgSize(grpcMaxMsgSize),

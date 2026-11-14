@@ -3,8 +3,12 @@ syntax = "proto3";
 option go_package = "./";
 
 service Magnet2Torrent {
-  // Converts magnet uri to torrent file
+  // Converts magnet uri to torrent file. A private torrent (BEP 27) whose
+  // magnet has no tr= of its own fails with FAILED_PRECONDITION and
+  // ErrorInfo{domain: "magnet2torrent", reason: "private_magnet"}.
   rpc Magnet2Torrent (Magnet2TorrentRequest) returns (Magnet2TorrentReply) {}
+  // Checks that a tracker accepts the key in its URL for a known info-hash.
+  rpc Verify (VerifyRequest) returns (VerifyReply) {}
 }
 
 // The request message containing the magnet url
@@ -15,4 +19,25 @@ message Magnet2TorrentRequest {
 // The response message containing the torrent
 message Magnet2TorrentReply {
   bytes torrent = 1;
+  // The info has private=1: the torrent announces only to the magnet's own
+  // tr=, in its order, and carries no web seeds.
+  bool private = 2;
+}
+
+// Not "Tier": these messages have no package, and rest-api registers this file
+// next to torrent-store's, which has a Tier of its own.
+message VerifyTier {
+  repeated string urls = 1;
+}
+
+message VerifyRequest {
+  string info_hash = 1;
+  repeated VerifyTier trackers = 2;
+}
+
+message VerifyReply {
+  // accepted | refused | unreachable | invalid
+  string outcome = 1;
+  // Set only when refused: key | account | unregistered | client | other
+  string class = 2;
 }
