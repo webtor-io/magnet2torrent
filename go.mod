@@ -2,7 +2,7 @@ module github.com/webtor-io/magnet2torrent
 
 go 1.27
 
-replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114100958-6a2fdef6b8eb
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114101238-3a021a7c7023
 
 require (
 	github.com/anacrolix/torrent v1.61.0
