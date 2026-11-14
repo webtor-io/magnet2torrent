@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,7 @@ import (
 	cs "github.com/webtor-io/common-services"
 	pb "github.com/webtor-io/magnet2torrent/proto"
 	"golang.org/x/net/context"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
@@ -39,6 +41,13 @@ type server struct {
 	// an empty DHT table, and a tracker answers in a round-trip. Same list
 	// torrent-store merges into stored torrents (DEFAULT_TRACKERS).
 	defaultTrackers []string
+	// allowLocalNetworks lets trackers and metainfo sources be dialled at
+	// loopback, private and other non-public addresses (see dialfilter.go).
+	// Off by default.
+	allowLocalNetworks bool
+	// refusalWarn lets one refusal a minute be logged. Shared by the
+	// per-request clients, so the limit holds for the process.
+	refusalWarn *rate.Limiter
 }
 
 // maxWait bounds a single resolution regardless of the caller's deadline.
@@ -82,7 +91,10 @@ func (noopPiece) MarkNotComplete() error                 { return nil }
 func (noopPiece) Completion() storage.Completion { return storage.Completion{Ok: true} }
 
 func newServer(defaultTrackers []string) *server {
-	return &server{defaultTrackers: defaultTrackers}
+	return &server{
+		defaultTrackers: defaultTrackers,
+		refusalWarn:     rate.NewLimiter(rate.Every(time.Minute), 1),
+	}
 }
 
 func (s *server) newClient() (*torrent.Client, error) {
@@ -97,6 +109,16 @@ func (s *server) newClient() (*torrent.Client, error) {
 	// the v6 DHT) and v6 peer dials.
 	cfg.DisableIPv6 = true
 	cfg.DefaultStorage = noopStorage{}
+	if !s.allowLocalNetworks {
+		// Unset, the client dials with a zero net.Dialer and net.ListenPacket;
+		// these are the same plus the check. HTTPDialContext serves the
+		// metainfo sources (a magnet's xs= and as=), fetched like a tracker
+		// from wherever the magnet says.
+		d := &net.Dialer{Control: s.refuseLocalNetworks}
+		cfg.TrackerDialContext = d.DialContext
+		cfg.TrackerListenPacket = s.listenPacketRefusingLocalNetworks
+		cfg.HTTPDialContext = d.DialContext
+	}
 	return torrent.NewClient(cfg)
 }
 
@@ -113,12 +135,21 @@ func (s *server) Magnet2Torrent(ctx context.Context, in *pb.Magnet2TorrentReques
 		}
 	}()
 
-	log.WithField("magnet", in.Magnet).Info("processing new request")
+	// Neither the magnet nor a parse error is logged or returned (the logging
+	// interceptor logs what is returned): a tr= can carry a private tracker's
+	// passkey, in the query or in the path. The parse errors quote the input,
+	// url.Parse all of it and the infohash parser the xt value, which an
+	// escaped separator stretches over the rest of the magnet.
+	m, err := metainfo.ParseMagnetV2Uri(in.Magnet)
+	if err != nil {
+		log.WithField("len", len(in.Magnet)).Error("failed parsing magnet")
+		return nil, errors.New("failed parsing magnet")
+	}
+	log.WithField("infoHash", m.InfoHash.Value.HexString()).Info("processing new request")
 
 	// AddMagnet parses the same way and then panics ("is zero") on a zero v1
-	// info-hash: an all-zero btih, or none (v2-only). A parse error is left
-	// to AddMagnet.
-	if m, err := metainfo.ParseMagnetV2Uri(in.Magnet); err == nil && m.InfoHash.Value.IsZero() {
+	// info-hash: an all-zero btih, or none (v2-only).
+	if m.InfoHash.Value.IsZero() {
 		return nil, status.Error(codes.InvalidArgument, "magnet has no non-zero btih info-hash")
 	}
 
@@ -172,8 +203,8 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	grpcLog := log.WithFields(log.Fields{})
 	// No payload interceptors: the reply is the whole .torrent, and logging it
 	// produced 13 MB lines that Loki rejects (burst 6 MiB) while promtail
-	// stalls the whole node's shipping in backoff. The magnet is logged by
-	// the handler.
+	// stalls the whole node's shipping in backoff. Nor the request: the
+	// magnet can carry a tracker passkey; the handler logs its infohash.
 	// The metrics interceptor is outermost so that it observes the final
 	// status, including a panic that grpc_recovery (innermost) turned into
 	// codes.Internal.
@@ -212,15 +243,10 @@ func newGRPCServer(srv pb.Magnet2TorrentServer) *grpc.Server {
 	return s
 }
 
-func main() {
-	log.SetFormatter(&log.TextFormatter{
-		FullTimestamp: true,
-	})
-	app := cli.NewApp()
-	app.Name = "magnet2torrent"
-	app.Usage = "runs magnet2torrent server"
-	app.Version = "0.0.1"
-	app.Flags = cs.RegisterPromFlags(cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
+// appFlags is the command line; serverFromFlags builds the server from it.
+// Both apart from main so that a test parses what main parses.
+func appFlags() []cli.Flag {
+	return cs.RegisterPromFlags(cs.RegisterPprofFlags(cs.RegisterProbeFlags([]cli.Flag{
 		cli.StringFlag{
 			Name:   "host, H",
 			Usage:  "listening host",
@@ -238,7 +264,29 @@ func main() {
 			Usage:  "trackers announced for every magnet on top of its own (comma- or whitespace-separated)",
 			EnvVar: "DEFAULT_TRACKERS",
 		},
+		cli.BoolFlag{
+			Name:   allowLocalNetworksFlag,
+			Usage:  "lets trackers and metainfo sources (xs=, as=) be contacted on local network addresses: loopback, private, link-local, CGNAT, multicast, unspecified, reserved and the rest the README lists (for a tracker on the local network); refused by default, as a torrent or a magnet picks the address",
+			EnvVar: allowLocalNetworksEnv,
+		},
 	})))
+}
+
+func serverFromFlags(c *cli.Context) *server {
+	s := newServer(parseTrackers(c.String("default-trackers")))
+	s.allowLocalNetworks = c.Bool(allowLocalNetworksFlag)
+	return s
+}
+
+func main() {
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+	app := cli.NewApp()
+	app.Name = "magnet2torrent"
+	app.Usage = "runs magnet2torrent server"
+	app.Version = "0.0.1"
+	app.Flags = appFlags()
 	app.Action = func(c *cli.Context) error {
 		// Setting Probe
 		probe := cs.NewProbe(c)
@@ -281,7 +329,7 @@ func main() {
 			return err
 		}
 		// Setting server (per-request torrent clients)
-		srv := newServer(parseTrackers(c.String("default-trackers")))
+		srv := serverFromFlags(c)
 
 		grpcError := make(chan error, 1)
 		go func() {

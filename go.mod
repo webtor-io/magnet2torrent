@@ -2,7 +2,7 @@ module github.com/webtor-io/magnet2torrent
 
 go 1.27
 
-replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261109065425-4886a4fd6e64
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114100958-6a2fdef6b8eb
 
 require (
 	github.com/anacrolix/torrent v1.61.0
@@ -14,6 +14,7 @@ require (
 	github.com/urfave/cli v1.22.17
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
 	golang.org/x/net v0.60.0
+	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -121,7 +122,6 @@ require (
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect

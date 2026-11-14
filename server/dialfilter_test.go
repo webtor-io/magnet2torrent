@@ -1,0 +1,330 @@
+package main
+
+import (
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
+	"github.com/urfave/cli"
+	pb "github.com/webtor-io/magnet2torrent/proto"
+	"golang.org/x/net/context"
+)
+
+func TestIsLocalNetworkAddr(t *testing.T) {
+	refused := []string{
+		"127.0.0.1", "127.255.255.254", "::1",
+		"10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.0.1",
+		"169.254.169.254", "169.254.0.1", "fe80::1", "fe80::1%eth0",
+		"0.0.0.0", "::", "::%eth0",
+		"224.0.0.1", "239.255.255.250", "ff02::1",
+		"100.64.0.0", "100.127.255.255",
+		"fc00::1", "fd12:3456::1",
+		// IPv4-mapped forms reach the IPv4 address.
+		"::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254",
+		"::ffff:0.0.0.0", "::ffff:100.64.0.1", "::ffff:224.0.0.1",
+		// "This network", reserved and broadcast.
+		"0.0.0.1", "0.255.255.255", "240.0.0.1", "254.255.255.255", "255.255.255.255",
+		// Site-local, deprecated.
+		"fec0::1", "feff:ffff::1",
+		// NAT64 local-use (RFC 8215): the whole /48, whatever it carries and
+		// wherever. 64:ff9b:1:a01:2:300:c000:201 has 10.1.2.3 at the /48
+		// offset (bits 48-63 and 72-87) and a public address in the low 32 bits.
+		"64:ff9b:1::", "64:ff9b:1::a00:1", "64:ff9b:1::c000:201",
+		"64:ff9b:1:a01:2:300:c000:201", "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+		// NAT64 (well-known prefix), 6to4 and IPv4-compatible forms are
+		// judged by the IPv4 address they carry. The low 32 bits of the first
+		// 6to4 one are public, so only the right offset refuses it.
+		"64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::6440:1",
+		"2002:a00:1::c000:201", "2002:7f00:1::", "2002:a9fe:a9fe::1",
+		"::7f00:1", "::a00:1", "::a9fe:a9fe",
+	}
+	allowed := []string{
+		"192.0.2.1", "198.51.100.1", "203.0.113.1", "2001:db8::1",
+		// Just outside the refused ranges.
+		"100.63.255.255", "100.128.0.0", "172.15.255.255", "172.32.0.0",
+		"169.253.255.255", "126.255.255.255", "::ffff:192.0.2.1",
+		"1.0.0.0", "223.255.255.255",
+		// A public IPv4 address carried in IPv6; the 6to4 one has a local
+		// address in its low 32 bits, which are not where 6to4 carries it.
+		"64:ff9b::c000:201", "2002:c000:201::a00:1", "::c000:201",
+		// Just outside the NAT64 prefixes: 10.1.2.3 in the low 32 bits is not
+		// reached outside the /96, and the local-use /48 ends on both sides.
+		"64:ff9b::1:a01:203", "64:ff9b:0:ffff:ffff:ffff:a01:203", "64:ff9b:2::a01:203",
+	}
+	for _, s := range refused {
+		if !isLocalNetworkAddr(netip.MustParseAddr(s)) {
+			t.Errorf("%s: allowed, want refused", s)
+		}
+	}
+	for _, s := range allowed {
+		if isLocalNetworkAddr(netip.MustParseAddr(s)) {
+			t.Errorf("%s: refused, want allowed", s)
+		}
+	}
+	// An unset address means this host to the kernel.
+	if !isLocalNetworkAddr(netip.Addr{}) {
+		t.Error("zero Addr: allowed, want refused")
+	}
+}
+
+// recordingPacketConn stands in for the UDP socket, so that the allowed case
+// sends nothing anywhere.
+type recordingPacketConn struct {
+	net.PacketConn
+	writes int
+}
+
+func (c *recordingPacketConn) WriteTo(p []byte, _ net.Addr) (int, error) {
+	c.writes++
+	return len(p), nil
+}
+
+// TestLocalNetworkHooks: both hooks refuse what they cannot read, and the UDP
+// one refuses before the socket sees the packet.
+func TestLocalNetworkHooks(t *testing.T) {
+	s := newServer(nil)
+	for addr, refused := range map[string]bool{
+		"192.0.2.1:80":          false,
+		"[2001:db8::1]:80":      false,
+		"127.0.0.1:80":          true,
+		"[::ffff:127.0.0.1]:80": true,
+		"[fe80::1%eth0]:80":     true,
+		"169.254.169.254:80":    true,
+		"not an address":        true,
+		"tracker.invalid:80":    true, // the hook only ever sees resolved addresses
+	} {
+		err := s.refuseLocalNetworks("tcp4", addr, nil)
+		if refused != errors.Is(err, errLocalNetwork) {
+			t.Errorf("Control(%q) = %v, want refused=%v", addr, err, refused)
+		}
+	}
+
+	for _, c := range []struct {
+		addr    net.Addr
+		refused bool
+	}{
+		{&net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 80}, false},
+		{&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 80}, true},
+		{&net.UDPAddr{IP: net.ParseIP("::ffff:10.0.0.1"), Port: 80}, true},
+		{&net.UDPAddr{IP: net.IPv4zero, Port: 80}, true},
+		{&net.UDPAddr{Port: 80}, true},                    // no IP: sent to this host
+		{&net.IPAddr{IP: net.ParseIP("192.0.2.1")}, true}, // not a UDP address
+		{(*net.UDPAddr)(nil), true},
+	} {
+		rec := &recordingPacketConn{}
+		_, err := localNetworkRefusingConn{rec, s}.WriteTo([]byte("x"), c.addr)
+		if c.refused != errors.Is(err, errLocalNetwork) || c.refused != (rec.writes == 0) {
+			t.Errorf("WriteTo(%v) = %v with %d writes, want refused=%v", c.addr, err, rec.writes, c.refused)
+		}
+	}
+}
+
+// TestLocalNetworksRefused drives the handler against a tracker or a source
+// on loopback: refused by default, with one warning naming the flag, and
+// reached once the flag allows local networks. The allowed run shows that the
+// refused one would have connected, so its "nothing arrived" is not vacuous.
+func TestLocalNetworksRefused(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		endpoint func(t *testing.T) (endpointURL, addr string, hits *atomic.Int64)
+		// The magnet parameter that carries the URL; empty: DEFAULT_TRACKERS.
+		param string
+	}{
+		{name: "http tr=", endpoint: httpEndpoint, param: "tr"},
+		{name: "udp tr=", endpoint: udpEndpoint, param: "tr"},
+		{name: "http default", endpoint: httpEndpoint},
+		// A metainfo source, fetched with the client's HTTP client.
+		{name: "xs= source", endpoint: httpEndpoint, param: "xs"},
+	} {
+		for _, allow := range []bool{false, true} {
+			name := c.name + " refused"
+			if allow {
+				name = c.name + " allowed"
+			}
+			t.Run(name, func(t *testing.T) {
+				hook := logtest.NewGlobal()
+				defer hook.Reset()
+				endpointURL, addr, hits := c.endpoint(t)
+				magnet := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20)
+				var defaults []string
+				if c.param == "" {
+					defaults = []string{endpointURL}
+				} else {
+					magnet += "&" + c.param + "=" + url.QueryEscape(endpointURL)
+				}
+				s := newServer(defaults)
+				s.allowLocalNetworks = allow
+
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					_, _ = s.Magnet2Torrent(ctx, &pb.Magnet2TorrentRequest{Magnet: magnet})
+				}()
+				defer func() { cancel(); <-done }()
+
+				deadline := time.Now().Add(10 * time.Second)
+				for time.Now().Before(deadline) {
+					if n := hits.Load(); n > 0 {
+						if allow {
+							return
+						}
+						t.Fatalf("endpoint got %d connections or packets, want none", n)
+					}
+					if !allow && refusalLogged(hook, addr) {
+						// The refusal comes before the connect or the send.
+						time.Sleep(100 * time.Millisecond)
+						if n := hits.Load(); n != 0 {
+							t.Fatalf("refusal logged, yet the endpoint got %d connections or packets", n)
+						}
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if allow {
+					t.Fatal("endpoint never reached with local networks allowed")
+				}
+				t.Fatalf("no refusal logged for %s; endpoint got %d", addr, hits.Load())
+			})
+		}
+	}
+}
+
+// One warning a minute for the whole process, naming the address and the
+// variable that allows it, however many requests get refused: each request
+// has its own client, so a limit per client would still warn on every one.
+// The counter carries the volume.
+func TestLocalNetworkRefusalWarnedOnceAMinute(t *testing.T) {
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	refused := func() float64 { return counterValue(t, "m2t_local_network_refusals_total", nil) }
+	s := newServer(nil)
+	var addrs []string
+	for range 2 {
+		endpointURL, addr, hits := httpEndpoint(t)
+		addrs = append(addrs, addr)
+		r0 := refused()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			magnet := "magnet:?xt=urn:btih:" + strings.Repeat("cd", 20) + "&tr=" + url.QueryEscape(endpointURL)
+			_, _ = s.Magnet2Torrent(ctx, &pb.Magnet2TorrentRequest{Magnet: magnet})
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for refused() == r0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		if refused() == r0 {
+			t.Fatalf("request %d: no refusal counted", len(addrs))
+		}
+		if n := hits.Load(); n != 0 {
+			t.Fatalf("request %d: endpoint got %d connections", len(addrs), n)
+		}
+	}
+	var warns []*log.Entry
+	for _, e := range hook.AllEntries() {
+		if e.Level == log.WarnLevel {
+			warns = append(warns, e)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("%d warnings for refusals in %d requests, want 1", len(warns), len(addrs))
+	}
+	line, err := warns[0].String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{addrs[0], "ALLOW_LOCAL_NETWORKS"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("warning %q does not name %q", line, want)
+		}
+	}
+}
+
+// main hands the flag and its variable to the server; without either, local
+// networks stay refused. The names are spelled out: the variable is shared
+// with torrent-web-seeder through one env file in self-hosted.
+func TestAllowLocalNetworksFromFlags(t *testing.T) {
+	parse := func(args ...string) bool {
+		t.Helper()
+		var s *server
+		app := cli.NewApp()
+		app.Flags = appFlags()
+		app.Action = func(c *cli.Context) error {
+			s = serverFromFlags(c)
+			return nil
+		}
+		if err := app.Run(append([]string{"magnet2torrent"}, args...)); err != nil {
+			t.Fatal(err)
+		}
+		return s.allowLocalNetworks
+	}
+	if parse() {
+		t.Error("allowed by default")
+	}
+	if !parse("--allow-local-networks") {
+		t.Error("the flag does not allow")
+	}
+	t.Setenv("ALLOW_LOCAL_NETWORKS", "true")
+	if !parse() {
+		t.Error("the variable does not allow")
+	}
+}
+
+// refusalLogged: a warning for exactly this address that names the flag.
+func refusalLogged(hook *logtest.Hook, addr string) bool {
+	for _, e := range hook.AllEntries() {
+		if e.Level == log.WarnLevel && e.Data["addr"] == addr && strings.Contains(e.Message, "--"+allowLocalNetworksFlag) {
+			return true
+		}
+	}
+	return false
+}
+
+// httpEndpoint counts TCP connections, not requests: a connection that never
+// sends one is already what the filter must prevent.
+func httpEndpoint(t *testing.T) (string, string, *atomic.Int64) {
+	var hits atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "test endpoint", http.StatusNotFound)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			hits.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv.URL + "/announce", srv.Listener.Addr().String(), &hits
+}
+
+func udpEndpoint(t *testing.T) (string, string, *atomic.Int64) {
+	var hits atomic.Int64
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		b := make([]byte, 2048)
+		for {
+			if _, _, err := pc.ReadFrom(b); err != nil {
+				return
+			}
+			hits.Add(1)
+		}
+	}()
+	return "udp://" + pc.LocalAddr().String() + "/announce", pc.LocalAddr().String(), &hits
+}

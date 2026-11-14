@@ -64,10 +64,16 @@ var (
 		Name: "m2t_resolve_in_flight",
 		Help: "Magnet resolutions currently running; each holds its own torrent client and DHT node.",
 	})
+
+	// The warning is logged once a minute; this carries the volume.
+	localNetworkRefusals = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "m2t_local_network_refusals_total",
+		Help: "Tracker and metainfo source connections, and UDP tracker sends, refused because the address is on a local network (ALLOW_LOCAL_NETWORKS).",
+	})
 )
 
 func init() {
-	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight)
+	prometheus.MustRegister(grpcMetrics, resolveTotal, resolveSeconds, resolveInFlight, localNetworkRefusals)
 	// The label set is closed, so every series can exist from the start:
 	// a dashboard then shows 0 rather than "no data", and rate() over a
 	// counter that appears mid-window does not miss its first increment.
