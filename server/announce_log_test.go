@@ -39,6 +39,11 @@ func TestAnnounceFailureLogRedacted(t *testing.T) {
 	if !strings.Contains(string(out), "announce failed") {
 		t.Fatalf("no announce failure line from the fork; the check below would pass vacuously:\n%s", out)
 	}
+	// A dial refusal also logs "announce failed"; only the tracker's own
+	// refusal carries the quoted key.
+	if !strings.Contains(string(out), "Invalid passkey") {
+		t.Fatalf("the tracker's refusal is not in the output, it was never reached:\n%s", out)
+	}
 	if strings.Contains(string(out), key) {
 		t.Fatalf("output contains the tracker key:\n%s", out)
 	}
